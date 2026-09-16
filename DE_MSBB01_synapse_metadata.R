@@ -1,5 +1,5 @@
 
-## Differential expression analyses on RNAseq data from MAYO
+## Differential expression analyses on RNAseq data from MSBB
 # STEP 01: metadata from synapse
 # J Lundin
 # June 16 2026
@@ -9,11 +9,13 @@ pacman::p_load(tidyverse, limma, edgeR, biomaRt, DESeq2, vsn, sva, pamr)
 pacman::p_load(synapser,dplyr,purrr,readr,lubridate,stringr,tibble,ggplot2)
 synLogin()
 
-#work_dir <- ("C:/Users/jlundin/OneDrive - Sage Bionetworks/RNASeq_Harm/MAYO")
-#setwd(work_dir)
+
+#MSBB_meta_ind <- read.csv(synapser::synGet('syn6101474')$path, stringsAsFactors = F, check.names = FALSE) # incorrect file - running to compare with previous results
 
 ### pulling metadata from synapse ----
 MSBB_meta_ind <- read.csv(synapser::synGet('syn73713767')$path, stringsAsFactors = F, check.names = FALSE) #from metadata harmonization study
+MSBB_meta_ind <- merge(MSBB_meta_ind, MSBB_dx_prev, by="individualID") # adding in diagnosis_previous from "DE_MSBB_check_prev_md.R"
+
 MSBB_meta_biosp <- read.csv(synapser::synGet('syn21893059')$path, stringsAsFactors = F, check.names = FALSE)
 MSBB_meta_assay <- read.csv(synapser::synGet('syn22447899')$path, stringsAsFactors = F, check.names = FALSE)
 
@@ -44,6 +46,19 @@ summary(comb$RIN)
 summary(comb$rRNA.rate)
 summary(comb$PMI)
 
+
+# diagnosis
+comb$diagnosis <- 'OTHER'
+comb[ (comb$Braak == "Stage IV" | comb$Braak == "Stage V" |comb$Braak == "Stage VI" ) &
+                 ( comb$amyCerad ==  "Frequent/Definite/C3"| comb$amyCerad== "Moderate/Probable/C2") &
+                 (comb$CDR >=1), ]$diagnosis <- 'AD'
+comb[ (comb$Braak == "Stage III" |comb$Braak == "Stage II"|comb$Braak == "Stage I"|comb$Braak == "None") &
+                 (comb$amyCerad == "Sparse/Possible/C1"  | comb$amyCerad== "None/No AD/C0"  ) & 
+                 (comb$CDR <= 0.5), ]$diagnosis <- 'CT'
+table(comb$diagnosis, useNA="always")
+table(comb$diagnosis, comb$sex, useNA="always")
+
+
 # diag2
 comb$diag2 <- 'OTHER2'
 comb[ (comb$Braak == "Stage IV" | comb$Braak == "Stage V" |comb$Braak == "Stage VI" ) &
@@ -53,7 +68,7 @@ comb[ (comb$Braak == "Stage III" |comb$Braak == "Stage II"|comb$Braak == "Stage 
 table(comb$diag2, useNA="always")
 table(comb$diag2, comb$sex, useNA="always")
 
-
+table(comb$diag2, comb$diagnosis_prev)
 
 table(comb$diag2, comb$sex, comb$tissue)
 table(comb$diag2, comb$tissue)
@@ -78,6 +93,12 @@ comb$age_cat[as.numeric(comb$ageDeath[comb$ageDeath != "90+"])>=85] <- "ge85lt90
 comb$age_cat[(as.numeric(comb$ageDeath[comb$ageDeath != "90+"])>=80 & as.numeric(comb$ageDeath[comb$ageDeath != "90+"])<85)] <- "ge80lt85"
 comb$age_cat[comb$ageDeath == "90+"] <- "90+"
 table(comb$age_cat, useNA = "always")
+
+comb$age_cat2 <- NA
+comb$age_cat2[comb$ageDeath == "90+"] <- "90+"
+comb$age_cat2[as.numeric(comb$ageDeath[comb$ageDeath != "90+"])<90] <- "<90"
+comb$age_cat2[comb$ageDeath == "90+"] <- "90+"
+table(comb$age_cat2, useNA = "always")
 
 # Sequencing Statistics 
 metrics <- read.csv(synapser::synGet('syn76845876')$path, stringsAsFactors = F)
@@ -132,5 +153,4 @@ file <- synapser::synStore(synapser::File(path = file_path, name="MSBB_md_all.cs
 
 
 # checking technical vars
-
-source("C:/Users/jlundin/OneDrive/git_code/RNASeq_DE/AMP_AD1/RNASeq_DE/AMP_AD1/functions/functions_summarize_metadata.R")
+#source("C:/Users/jlundin/OneDrive/git_code/RNASeq_DE/AMP_AD1/RNASeq_DE/AMP_AD1/functions/functions_summarize_metadata.R")

@@ -23,16 +23,15 @@ MSBB_QC.Rmd
   output: MSBB_md_counts.rds ("metadata", "counts") (syn76887997)
 
   Ran CQN normalization on QC file
-  output: MSBB_md_counts_cqn_.rds ("metadata", "counts", "dge_cqn", "dge_cqn_df") (syn76980951)  
+  output: MSBB_md_counts_cqn.rds ("metadata", "counts", "dge_cqn", "dge_cqn_df") (syn76980951)  
 
 On AWS:
-DE_QC_b1tob4_24July2026.Rmd  #here for reference but not longer used
+DE_QC_MSBB_26Aug2026.Rmd  #here for reference but not longer used
    Outlier detection using PCA (crude)
    Calculate SVs - no longer using bc of PCA of RNA metrics
    Variance partitioning visualization - figure saved
-   Outlier detection using PCA (residualized with incorporation of RNA metrics and SVs) - use AWS version instead (on residualized data)
-   #output: ROSMAP_md_sv_final_for_DE_models.csv [final metadata file, includes final metadata with RNA metrics and SVs] ] ("md_sv") (synxxx)
-   
+   Correlation of model PCs with covariates
+
 On AWS:
 DE_with_built_interaction_no_svs.R 
   output "ROSMAP_DE_final.rds" (syn76557299) contains:
@@ -75,14 +74,14 @@ DE_Residuals_for_sharing.R
       "males_CN6_res3" = males_CN6, 
       "females_CN6_res3" = females_CN6
  
-On AWS:
+On local (moved to be part of QC Markdown):
 DE_residualized_plots_by_final_batch.R
-    Run PCA on residualized data with overlay markers for batch and diagnosis - plots output
-    "ROSMAP_residualized_data_by_batch.png"
-    "ROSMAP_residualized_data_by_diagnosis.png"
+    Run PCA on residualized data with overlay markers for sex and diagnosis - plots output in Rmd
 
+
+    
 Technical variables
-  technical_stats_multiqc_star.R (syn76227881) ROSMAP_multiqc_star_technical_stats.csv
+  technical_stats_multiqc_star.R (syn76227881) Output: MSBB_multiqc_star_technical_stats.csv
   technical_stats_fastqc.R (syn76283403) [run on AWS] (ROSMAP_fq_stats.rds contains: basic_stats.txt, phred_per_base.txt, base_content.txt) 
 
       

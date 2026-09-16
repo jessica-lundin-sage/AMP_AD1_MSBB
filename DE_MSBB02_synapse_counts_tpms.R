@@ -6,12 +6,22 @@
 
 pacman::p_load(tidyverse, limma, edgeR, biomaRt, DESeq2, vsn, sva, pamr)
 pacman::p_load(synapser,dplyr,purrr,readr,lubridate,stringr,tibble,ggplot2)
+pacman::p_load(httr, purrr)
 synLogin()
 
 #work_dir <- ("C:/Users/jlundin/OneDrive - Sage Bionetworks/RNASeq_Harm/MAYO")
 #setwd(work_dir)
 
-source("C:/Users/jlundin/OneDrive/git_code/RNASeq_DE/AMP_AD1/RNASeq_DE/AMP_AD1/functions/functions_filter_low_count_genes.R")
+# get functions from git
+urls <- c("https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_filter_low_count_genes.R")
+walk(urls, function(u) {
+  resp <- GET(u, add_headers(Authorization = paste("token", Sys.getenv("GITHUB_PAT"))))
+  stop_for_status(resp)
+  tmp <- tempfile(fileext = ".R")
+  writeLines(content(resp, "text", encoding = "UTF-8"), tmp)
+  source(tmp)
+})
+
 
 ### pulling count and tpm data from synapse ----
 msbb_counts_temp <- synapser::synGet("syn69368998") 
@@ -19,11 +29,11 @@ msbb_counts_temp <- synapser::synGet("syn69368998")
 msbb_tpm_temp <- synapser::synGet("syn69368999") 
   msbb_tpm <- read.csv(msbb_tpm_temp$path, sep="\t", header=T, check.names = FALSE)
 
-  
-  
+# metadata
 MSBB_md_temp <- synapser::synGet("syn76887188") #MSBB_md_all
   MSBB_md <- read.csv(MSBB_md_temp$path, header=T)
 
+  
 ## filtering on low counts ----
 filtered_genes_MSBB <- filter_gene_expression(
   tpm_file   = msbb_tpm ,
@@ -118,27 +128,20 @@ filtered_genes_MSBB <- filter_gene_expression(
   mat1 <- as.data.frame(mat1)
   
   mat1$gene_id_clean <- sub("\\..*", "", mat1$gene_id)
-  
-  # 1. Install and load
-  BiocManager::install("biomaRt")
-  library(biomaRt)
-  
-  # 2. Connect to the Ensembl human database
-  mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl",
-                  host = "https://ensembl.org")
+  #BiocManager::install("EnsDb.Hsapiens.v86")  # run once, not in the pipeline script
+  library(EnsDb.Hsapiens.v86)
+  library(ensembldb)
   
   # 3. Define your list of target Gene IDs
   my_ensembl_ids <- unique(mat1$gene_id_clean)
   
-  # 4. Fetch the chromosome, start, and end positions
-  gene_positions <- getBM(
-    attributes = c("ensembl_gene_id", "chromosome_name", "start_position", "end_position", "strand"),
-    filters = "ensembl_gene_id",
-    values = my_ensembl_ids,
-    mart = mart
-  )
+  gene_positions <- genes(EnsDb.Hsapiens.v86,
+                          filter = GeneIdFilter(my_ensembl_ids),
+                          columns = c("gene_id", "seq_name", "gene_seq_start", "gene_seq_end", "seq_strand"))
+  gene_positions <- as.data.frame(gene_positions)
+  gene_positions <- gene_positions %>% dplyr::rename(chromosome_name = seqnames)
   
-  mat1 <- merge(mat1, gene_positions, by.x="gene_id_clean", by.y="ensembl_gene_id", all=T)
+  mat1 <- merge(mat1, gene_positions, by.x="gene_id_clean", by.y="gene_id", all=T)
   
   
   # write to synapse
