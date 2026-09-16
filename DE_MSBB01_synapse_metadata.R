@@ -145,6 +145,7 @@ metrics2 <- metrics %>% dplyr::select(specimenID, "picard_UNPAIRED_READS_EXAMINE
 md <- merge(comb, metrics2, by.x="specimenID", all.x=T)
 
 
+
 # add sequencing statistics below ASAP - until then use this
 file_path <- "MSBB_md_all.csv"
 write.csv(md, file = file_path, row.names = FALSE)

@@ -1,0 +1,1184 @@
+---
+title: "AMP-AD1.0 MSBB QC"
+author: "Jessica Lundin and ADTR Science Team"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: 
+  html_document:
+    embed-resources: true
+    self_contained: true
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+#install.packages("pacman")
+#library(sageRNAUtils) #in Jaclyn's GitHub repo
+#install.packages("knitr")
+#install.packages("kableExtra")
+#install.packages("viridisLite")
+#install.packages("viridis")
+pacman::p_load(synapser, dplyr, ggplot2,viridisLite,viridis,patchwork,matrixStats,stringr,forcats,plotly,knitr,kableExtra)
+FastQC <- TRUE
+MultiQC <- TRUE
+```
+
+
+```{r functions-from-github,echo=FALSE, warning=FALSE, message=FALSE}
+library(httr)
+library(purrr)
+
+urls <- c(
+  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_demo_plots_from_Jaclyn.R",
+  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_sex_prediction.R",
+  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_pca_outliers.R",
+  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_RNA_metric_PCA.R",
+  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_JB_fastqc_multiqc.R"
+  )
+
+walk(urls, function(u) {
+  resp <- GET(u, add_headers(Authorization = paste("token", Sys.getenv("GITHUB_PAT"))))
+  stop_for_status(resp)
+  tmp <- tempfile(fileext = ".R")
+  writeLines(content(resp, "text", encoding = "UTF-8"), tmp)
+  source(tmp)
+})
+```
+
+
+```{r data-load, echo=FALSE, warning=FALSE, message=FALSE}
+# Load metadata and filtered count data
+#source("C:/Users/jlundin/OneDrive/git_code/RNASeq_DE/AMP_AD1/RNASeq_DE/AMP_AD1/DE_STEP03_QC_preprocessing_prep_sep_by_tissue.R")
+
+invisible(synLogin(silent=TRUE))
+md_all_temp <- synapser::synGet('syn76887188') 
+  md_all <- read.csv(md_all_temp$path)
+
+counts_temp <- synapser::synGet('syn76887322') 
+  counts <- read.csv(counts_temp$path, sep="\t",check.names = FALSE)
+  counts <- counts[,-2]
+
+meta_age <- md_all |>
+  mutate(ageDeath = case_when(
+    is.na(ageDeath) | ageDeath == "missing or unknown" ~ NA,
+    ageDeath == "90+" ~ 90,
+    .default = suppressWarnings(as.numeric(ageDeath))
+  )
+)
+
+
+delete_var <- read.csv(synapser::synGet('syn76980381')$path, sep="\t", stringsAsFactors = F, check.names = FALSE)
+#delete_var <- delete_var[delete_var$tissue2 ==  c("FP","IFG","PG","STG")] # not necessary since PC was not included on the stratified filter
+delete_var2 <- delete_var$gene_id
+delete_var2 <- unique(delete_var2)
+
+counts <- as.data.frame(counts)
+rownames(counts) <- counts$gene_id 
+counts_sex_ck <- counts
+counts <- counts[!(counts$gene_id %in% delete_var2),]
+
+md_all <- md_all |>
+  group_by(barcode) |>
+  slice_max(mapped, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+
+# Align samples 
+samples  <- intersect(colnames(counts), md_all$specimenID)
+if (length(samples) == 0) stop("No overlapping samples between counts and metadata.")
+rownames(counts) <- counts$gene_id
+counts  <- counts[, samples, drop = FALSE]
+md_all <- md_all[match(samples, md_all$specimenID), , drop = FALSE]
+rownames(md_all) <- md_all$specimenID
+
+
+#metadata <- md_all
+```
+
+# Definitions
+**Abbreviations:** FP = frontal pole, IFG = inferior frontal gyrus, PG = parahippocampal gyrus, PC = prefrontal cortex, STG = superior temporal gyrus
+
+To compare analysis results across studies (cross-cohort analysis) we chose to determine AD case/control status according to neuropathological data because cohorts had variable clinical and neuropathologic diagnostic information regarding AD case status. 
+
+**AD diagnosis:** Braak stage ≥ IV and CERAD measure equal to moderate/probable AD or frequent/definite AD.
+
+**Control diagnosis:** Braak stage ≤ III and CERAD measure equal to none/no AD or sparse/possible AD.
+
+Any donors who did not fall under diagnosis or control criteria were assigned as “other”.
+
+**Starting dataset: n=`r nrow(md_all)` samples**
+
+# Descriptive: Demographics
+
+
+
+```{r generate-demographics-plots, warning=FALSE, message=FALSE, fig.width=12, fig.height=20}
+## Generate QC plots
+
+md_all$ADdiagnosis <- md_all$diagnosis
+p1<-make_bar_plot(md_all, "tissue2", facet_var = NULL)
+p2<-make_bar_plot(md_all, "diag2")
+p3<-make_bar_plot(md_all, "sex")
+p4<-make_bar_plot(md_all, "race")
+p5<-make_bar_plot(md_all, "isHispanic")
+p6<-make_bar_plot(md_all, "cohort")
+p7<-(ggplot(meta_age, aes(x = ageDeath)) + labs(title = "ageDeath")) |>
+  format_histogram_plot()
+p8<-make_bar_plot(md_all, "age_cat", facet_var = "diagnosis")
+p9a <- make_bar_plot_batch_fillvar(md_all, "diagnosis", facet_var = "tissue", fill_var = "sex")
+p9b <- make_bar_plot_batch_fillvar(md_all, "diag2", facet_var = "tissue", fill_var = "sex")
+
+library(patchwork)
+plot_list <- list(p1, p2, p3, p4, p5, p6, p7, p8, p9a, p9b )
+wrap_plots(plot_list, nrow = 5, ncol = 2)
+
+```
+
+# Descriptive: Technical covariates
+
+number of missing for PMI: `r length(md_all[is.na(md_all$PMI),])` 
+
+number of missing values for RIN: `r length(md_all[is.na(md_all$RIN),])` 
+
+```{r generate-technical-covariate-plots, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+#make_bar_plot_batch(md_all, "procbatch")
+#make_bar_plot_batch(md_all, "libraryPrep")
+#make_bar_plot_batch(md_all, "final_batch")
+#make_bar_plot_batch_fillvar(md_all, "final_batch", facet_var = "tissue", fill_var = "procbatch")
+#make_bar_plot_batch_fillvar(md_all, "final_batch", facet_var = "tissue", fill_var = "libraryPrep")
+
+p11 <- make_bar_plot_batch_fillvar(md_all, "sequencingBatch", facet_var = "tissue", fill_var = "sex", color_scale = "brewer")
+
+p9<-(ggplot(md_all, aes(x = PMI)) + labs(title = "PMI")) |>
+  format_histogram_plot()
+
+p10<-(ggplot(md_all, aes(x = RIN)) + labs(title = "RIN")) |>
+  format_histogram_plot()
+
+library(patchwork)
+combined_fig <- p11 / (p9 + p10)
+print(combined_fig)
+```
+
+```{r generate-RIN-plots1, warning=FALSE, message=FALSE}
+md_all_RIN_na <- md_all[is.na(md_all$RIN),] 
+md_all_RIN_WARN <- md_all[(is.na(md_all$RIN) | md_all$RIN < 2.5),] 
+```
+
+# RIN
+**Samples were marked as QC failures if RIN was NA (n=`r nrow(md_all_RIN_na)`)**
+
+**Samples were flagged as QC warning if RIN < 2.5 (n=`r nrow(md_all_RIN_WARN)`) - no samples were belwo 2.0 (already filtered)**
+
+RIN is a numerical value that indicates RNA integrity. 
+
+```{r generate-RIN-plots2, warning=FALSE, message=FALSE}
+md_all_RIN_na <- md_all[is.na(md_all$RIN),] 
+md_all_RIN_WARN <- md_all[(is.na(md_all$RIN) | md_all$RIN < 2.5),] 
+
+plt1 <- ggplot(md_all[!is.na(md_all$RIN),] , aes(x = tissue2, y = RIN, fill = tissue2)) +
+  geom_boxplot(outliers = FALSE, na.rm = TRUE, width = 0.5) +
+  geom_jitter(aes(color=RIN<2.5), size = 0.5, na.rm = TRUE, width = 0.3) +
+  scale_color_manual(values=c("TRUE" = "red", "FALSE" = "black")) +
+  xlab(NULL) +
+  theme_bw() +
+  scale_fill_viridis(discrete = TRUE, begin = 0.1, end = 0.9, alpha = 0.7) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        title = element_text(face = "bold")) +
+  labs(color = "RIN < 2.5", fill = "Tissue")
+
+print(plt1)
+
+## table
+#tab_data <- as.data.frame.matrix(table(md_all_RIN_WARN$tissue2))
+
+#tab_data %>% kable(format = "html", caption = "RIN < 2.5 or missing RIN data: Sample count by tissue and final_batch") %>%
+#  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+#                full_width = F, position = "left") %>%
+#  row_spec(0, bold = TRUE, color = "white", background = "#444444")
+
+```
+
+
+# Inferred sex
+
+Examine average expression of key Y-chromosome genes to infer the sex of each sample. Genes used are RPS4Y1, EIF1AY, DDX3Y, and KDM5D, which were determined to be robust markers for sex in Staedtler, et al (2013). 
+
+Samples whose inferred sex did not match their reported sex were marked as QC failures (for now).
+
+```{r generate-sex prediction-plots1, warning=FALSE, message=FALSE}
+
+## Generate sex prediction plots
+# inputs 
+#sc_data <- rosmap_reads_DLPFC
+#md_brain_tissue <- md_DLPFC
+#tissue <- "DLPFC"
+
+
+#tissue2_var <- "DLPFC"
+#tissue2_var <- "CN"
+#for (j in 1:length(tissue2_var)){
+
+sc_data <- counts_sex_ck
+#md_brain_tissue <- md_all[md_all$tissue2 == tissue2_var,]
+md_brain_tissue <- md_all
+tissue <- "all"
+
+# gene expression reads file
+sc_data$gene_id <- rownames(sc_data)
+sc_data$gene_id <- sub("\\..*$", "", sc_data$gene_id)
+sc_data2 <- sc_data[!duplicated(sc_data$gene_id),]
+sc_data2 <- as.data.frame(sc_data2)
+rownames(sc_data2) <- sc_data2$gene_id
+sc_data2 <- sc_data2 %>% dplyr::select(-gene_id)
+
+#specID_tissue <- md_all$specimenID[md_all$tissue2 == tissue2_var]
+#sc_data2 <- sc_data2[,colnames(sc_data2) %in% specID_tissue]
+
+
+sex_pred_strat = FALSE
+if(sex_pred_strat){
+#delete_var <- read.csv(synapser::synGet('syn75279942')$path, sep="\t", stringsAsFactors = F, check.names = FALSE)
+#delete_var2 <- delete_var[delete_var$tissue2 == tissue2_var,]
+sc_data2_filtered <- sc_data2
+sex_var <- c("female","male")
+for (i in 1:length(sex_var)){
+# 1. Identify the specific genes and specimens to target
+#target_genes <- delete_var2$gene_id_clean[delete_var2$sex == sex_var[i]]
+target_genes <- delete_var2$gene_id_clean
+target_specs <- md_brain_tissue$specimenID[md_brain_tissue$sex == sex_var[i]]
+
+# 2. Filter down to only those that actually exist in your matrix
+valid_genes <- intersect(target_genes, rownames(sc_data2))
+valid_specs <- intersect(target_specs, colnames(sc_data2))
+
+# 3. Create a coordinate grid matrix of row/column combinations
+coord_matrix <- expand.grid(row = valid_genes, col = valid_specs, stringsAsFactors = FALSE)
+coord_matrix <- as.matrix(coord_matrix)
+
+# 4. Turn those specific cells into NA (representing NULL)
+#sc_data2[coord_matrix] <- NA
+# 1. Convert your data frame to a matrix
+sc_matrix <- as.matrix(sc_data2_filtered)
+
+# 2. Apply your coordinates (this will work now!)
+sc_matrix[coord_matrix] <- NA
+
+# 3. Convert it back to a data frame
+sc_data2_filtered <- as.data.frame(sc_matrix)
+}
+
+#sc_data2[1:5,1:5]
+expr_mat <- sc_data2_filtered
+sc_data2 <- sc_data2_filtered
+}
+
+# md file with self reported sex
+md_brain_tissue_sorted <- md_brain_tissue [match(colnames(sc_data2), md_brain_tissue$specimenID), ]
+reported_sex_vector <- md_brain_tissue_sorted$sex
+
+# Vector of names
+names <- colnames(sc_data2)
+
+# Assign names
+names(reported_sex_vector) <- names
+
+expr_mat <- sc_data2 
+
+# run code 
+result <- predict_sex2(expr_mat, reported = reported_sex_vector, threshold = 6.01)
+result_md <- merge(result, md_brain_tissue, by.x="sample", by.y="specimenID", all=T)
+result_md_filtered <- result_md  %>% group_by(individualID) %>%
+  filter(any(concordant == FALSE)) %>% ungroup()
+
+result2 <- result %>%
+  left_join(md_brain_tissue_sorted %>% dplyr::select(specimenID, tissue2, individualID), by = c("sample" = "specimenID"))
+
+#attr(sc_data2, "threshold") <- list(xist = 2^10, y = 2^4)
+#attr(sc_data2, "threshold") <- list(xist = 2^10)
+#thr <- attr(sc_data2, "threshold")
+  
+result2 <- result2 |> mutate(concordant2 = case_when(
+     !concordant                                  ~ "Discordant",
+      TRUE                                         ~ "Concordant" ))
+
+QC_failures_sex <- result2 %>% filter(concordant2 == "Discordant"  )
+QC_nonfailures_sex <- result2 %>% filter(concordant2 == "Concordant" )
+    
+meta_sub_sex_unique <- result2 %>% filter(concordant2 == "Discordant" ) %>% distinct(individualID, .keep_all = TRUE)
+
+```
+**Reported sex vs inferred sex mismatches: `r nrow(QC_failures_sex)` sample(s) from `r nrow(meta_sub_sex_unique)` individuals across all brain tissue regions (n=`r ncol(sc_data2)` total samples).** 
+
+```{r generate-sex prediction-plots2, warning=FALSE, message=FALSE}
+#plot_sex_scores(result_md)           # XIST vs Y-score scatter
+plot_sex_scores(result_md)  
+
+
+
+
+## table
+meta_sub_sex <- result2 %>% filter(concordant2 == "Discordant") |>
+  dplyr::select(sample, tissue2, concordant2) |>
+  dplyr::rename(`Specimen ID` = sample,
+                Tissue = tissue2,
+                QC = concordant2) |>
+  arrange(QC, Tissue, `Specimen ID`)
+
+# Create the table
+kable(meta_sub_sex, format = "html", caption = "Reported sex vs inferred sex mismatches") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444")
+
+
+result2$concordant[result2$sample == "BM_36_296"] <- TRUE
+result2$concordant2[result2$sample == "BM_36_296"] <- "Concordant"
+
+## table
+meta_sub_sex <- result2 %>% filter(concordant2 == "Discordant") |>
+  dplyr::select(sample, tissue2, concordant2) |>
+  dplyr::rename(`Specimen ID` = sample,
+                Tissue = tissue2,
+                QC = concordant2) |>
+  arrange(QC, Tissue, `Specimen ID`)
+
+# Create the table
+kable(meta_sub_sex, format = "html", caption = "Reported sex vs inferred sex mismatches, with BM_36_296 (parahippocampal gyrus) marked as concordent due to being on the threshold" ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444")
+
+
+
+```
+
+
+# Validation for FastQC
+
+Examine Phred score and average base content at each position of a read.
+
+Samples fail QC if the Phred score is < 20.
+
+Samples get a QC warning if the Phred score is below Q1 - 1.5 * IQR.
+
+Samples get a QC warning if the base content is above Q3 + 1.5 * IQR for any base. 
+
+Samples with 2 or more warnings across all QC metrics fail QC.
+
+
+```{r fast-qc validation, warning=FALSE, message=FALSE}
+# This code will ONLY run if FastQC is TRUE.
+# If FastQC is FALSE, the code is skipped entirely during knitting.
+
+# Load fastqc stats (Mayo_fq_stats.rds)
+invisible(synLogin(silent=TRUE))
+file_entity3 <- synGet("syn76815065") # MSBB_fq_stats.rds "basic_stats", "phred_per_base", "base_content"
+load(file_entity3$path)
+basic_stats <- MSBB_bundle$basic_stats
+phred_per_base <- MSBB_bundle$phred_per_base
+base_content <- MSBB_bundle$base_content
+
+# Load gene metadata
+syn_gene_file <- synapser::synGet('syn74907403')
+gene_info <- read.csv(syn_gene_file$path)
+
+
+base_content2 <- merge(base_content, md_all, by="specimenID")
+basic_stats2 <- merge(basic_stats, md_all, by="specimenID")
+phred_per_base2 <- merge(phred_per_base, md_all, by="specimenID")
+
+
+# validate-fastqc 
+thresholds <- NULL
+thresholds$phred <- 20
+
+base_content2 <- base_content2 |>
+  group_by(read, tissue2, base) |>
+  mutate(outlier_color = ifelse(is_outlier_IQR(mean_base_deviation),
+                                "black", NA)) |>
+  ungroup()
+
+plt1b <- ggplot(base_content2,
+               aes(x = base, y = mean_base_deviation, fill = base)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA) +
+  geom_jitter(aes(color = outlier_color), # <-- Map inside aes() without using $
+              size = 0.5, width = 0.05, na.rm = TRUE) +
+  scale_color_identity() +                # <-- Tells ggplot to use the actual color strings
+  theme_bw() +
+  facet_grid(rows = vars(read), cols = vars(tissue2)) +
+  scale_fill_viridis(discrete = TRUE, begin = 0.1, alpha = 0.8) +
+  theme(strip.background = element_rect(fill = "#EEEEEE", color = "black"),
+        strip.text = element_text(face = "bold"),
+        title = element_text(face = "bold")) +
+  ggtitle("Mean deviation from expected base proportions")
+
+print(plt1b)
+
+# Using the mean content deviation from 25% of each base at each position.
+# Mayo uses sum of deviation instead of mean, but they're equivalent for the
+# purposes of outlier finding. Unlike for the graph, we only want outliers that
+# are on the upper tail (over-representation of a base).
+base_content_outliers <- base_content2 |>
+  dplyr::group_by(tissue, read, base) |>
+  mutate(is_outlier = is_outlier_IQR(mean_base_deviation, tail = "upper")) |>
+  subset(is_outlier == TRUE) |>
+  pull(specimenID)
+
+# Any base falling below the Phred threshold marks the sample as failing QC
+phred_fail <- phred_per_base |>
+  subset(Median < thresholds$phred) |>
+  pull(specimenID)
+
+phred_outliers <- phred_per_base |>
+  group_by(position) |>
+  mutate(is_outlier = is_outlier_IQR(Median, tail = "lower")) |>
+  subset(is_outlier == TRUE) |>
+  pull(specimenID)
+
+metadata <- md_all
+metadata$base_content_warn <- metadata$specimenID %in% base_content_outliers
+metadata$phred_score_valid <- !(metadata$specimenID %in% phred_fail)
+metadata$phred_score_warn <- metadata$specimenID %in% phred_outliers
+
+n_fqc_warn_fail <- sum(metadata$base_content_warn | metadata$phred_score_warn |
+                         !metadata$phred_score_valid)
+
+
+# ---- print_fastqc-results
+meta_sub_fastqc <- subset(metadata, base_content_warn | phred_score_warn | !phred_score_valid) |>
+  dplyr::select(specimenID, tissue, base_content_warn, phred_score_warn, phred_score_valid) |>
+  dplyr:: mutate(
+    `Phred Score` = case_when(
+      !phred_score_valid ~ "FAIL",
+      phred_score_warn ~ "WARN",
+      .default = "."
+    ),
+    `Base Content` = ifelse(base_content_warn == TRUE, "WARN", ".")
+  ) |>
+  dplyr::select(specimenID, tissue, `Phred Score`, `Base Content`) |>
+  dplyr::rename(Tissue = tissue, `Specimen ID` = specimenID) |>
+  arrange(Tissue, `Specimen ID`)
+
+#cat("This table shows Phred QC warnings vs Base Content QC warnings -- FAIL if QC warning for both?")
+#print(table(meta_sub_fastqc$`Phred Score`, meta_sub_fastqc$`Base Content`))
+
+
+# Move this back out when pastqc is run
+#**FastQC Phred failure(s):** `r sum(!metadata$phred_score_valid)` sample(s)
+
+#**FastQC Phred warning(s):** `r sum(metadata$phred_score_warn)` sample(s)
+
+#**FastQC base content warning(s):** `r sum(metadata$base_content_warn)` sample(s)
+```
+
+
+
+# Validation for MultiQC
+
+Examined percentage of reads mapped and percentage of reads duplicated.
+
+Samples were marked as QC failure if < 70% reads mapped or > 80% duplicated reads.
+
+Samples were flagged as QC warning if reads mapped reported less than Q1 - 1.5 * IQR or duplicate reads reported more than Q3 + 3 * IQR. QC warnings were evaluated independently for each brain region (tissue type).
+
+```{r multi-qc validation, echo=FALSE, warning=FALSE, message=FALSE}
+reads_mapped <- 70
+reads_duplicated <- 80
+
+reads_mapped_fail <- md_all |>
+  subset(samtools_reads_mapped_percent < reads_mapped) |>
+  pull(specimenID)
+
+
+tissue_var <- unique(md_all$tissue)
+reads_mapped_outliers <- purrr::map(tissue_var, \(t) {
+ md_all |>
+    filter(tissue == t) |>
+    mutate(is_outlier = is_outlier_IQR(samtools_reads_mapped_percent, tail = "lower")) |>
+    filter(is_outlier == TRUE) |>
+    pull(specimenID)
+}) |>
+  unlist()
+
+md_all$picard_PERCENT_DUPLICATION <- md_all$picard_PERCENT_DUPLICATION * 100
+reads_dupe_fail <- md_all  |>
+  subset(picard_PERCENT_DUPLICATION > reads_duplicated) |>
+  pull(specimenID)
+
+# Use Q3 + 3*IQR for outliers here
+#reads_dupe_outliers <- multiqc_stats |>
+#  mutate(is_outlier = is_outlier_IQR(picard_PERCENT_DUPLICATION,
+#                                     tail = "upper", IQR_mult = 3)) |>
+#  subset(is_outlier == TRUE) |>
+#  pull(specimenID)
+
+reads_dupe_outliers <- purrr::map(tissue_var, \(t) {
+  md_all  |>
+    filter(tissue == t) |>
+    mutate(is_outlier = is_outlier_IQR(picard_PERCENT_DUPLICATION,
+                                       tail = "upper", IQR_mult = 3)) |>
+    filter(is_outlier == TRUE) |>
+    pull(specimenID)
+}) |>
+  unlist()
+
+
+md_all$reads_mapped_fail <- md_all$specimenID %in% reads_mapped_fail
+md_all$reads_mapped_warn <- md_all$specimenID %in% reads_mapped_outliers
+md_all$reads_mapped_valid <- !(md_all$specimenID %in% reads_mapped_fail)
+
+md_all$reads_duplicated_fail <- md_all$specimenID %in% reads_dupe_fail
+md_all$reads_duplicated_warn <- md_all$specimenID %in% reads_dupe_outliers
+md_all$reads_duplicated_valid <- !(md_all$specimenID %in% reads_dupe_fail)
+
+#mqc_plot <- multiqc_stats |>
+#  mutate(
+#    mapped_status = case_when(
+#      specimenID %in% reads_mapped_fail ~ "Fail",
+#      specimenID %in% reads_mapped_outliers ~ "Warn", 
+#      .default = "Pass"
+#    ),
+#    duplicated_status = case_when(
+#      specimenID %in% reads_dupe_fail ~ "Fail",
+#      specimenID %in% reads_dupe_outliers ~ "Warn", 
+#      .default = "Pass"
+#    )
+#  )
+
+mqc_plot <- md_all  |>
+  mutate(
+    mapped_status = case_when(
+      specimenID %in% reads_mapped_fail ~ "Fail",
+      specimenID %in% reads_mapped_outliers & !specimenID %in% reads_mapped_fail ~ "Warn",
+      .default = "Pass"
+    ),
+    duplicated_status = case_when(
+      specimenID %in% reads_dupe_fail ~ "Fail",
+      specimenID %in% reads_dupe_outliers & !specimenID %in% reads_dupe_fail ~ "Warn",
+      .default = "Pass"
+    )
+  ) |>
+  mutate(mapped_status = factor(mapped_status, levels = c("Fail", "Warn", "Pass")))
+#levels(mqc_plot$mapped_status)
+
+
+stat_colors <- c("Pass" = "black", "Warn" = "grey75", "Fail" = "red3")
+plt1 <- ggplot(mqc_plot,
+               aes(x = tissue2, y = samtools_reads_mapped_percent, fill = tissue2)) +
+  geom_boxplot(outliers = FALSE, width = 0.1) +
+  geom_jitter(aes(color = mapped_status),
+              width = 0.2,
+              size = ifelse(mqc_plot$mapped_status == "Pass", 0.5, 1)) +
+  theme_bw() +
+  theme(legend.position = "none",
+        title = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab(NULL) +
+  scale_color_manual(values = stat_colors, limits = c("Fail", "Warn", "Pass")) +
+  scale_fill_viridis(name = "Tissue", discrete = TRUE, begin = 0.2, alpha = 0.7) +
+  ggtitle("Percentage of reads mapped")
+
+plt2 <- ggplot(mqc_plot,
+               aes(x = tissue2, y = picard_PERCENT_DUPLICATION, fill = tissue2)) +
+  geom_boxplot(outliers = FALSE, width = 0.1) +
+  geom_jitter(aes(color = duplicated_status),
+              width = 0.2,
+              size = ifelse(mqc_plot$duplicated_status == "Pass", 0.5, 1)) +
+  theme_bw() +
+  theme(title = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab(NULL) +
+  labs(color = "Status") +
+  scale_color_manual(values = stat_colors, limits = c("Fail", "Warn", "Pass")) +
+  scale_fill_viridis(name = "Tissue", discrete = TRUE, begin = 0.2, alpha = 0.7) +
+  ggtitle("Percentage of reads duplicated") +
+  theme(plot.margin = unit(c(0, 0, 0, 50), units = "pt"))
+
+print(plt1 + plt2)
+
+n_mqc_fail <- sum(md_all$reads_mapped_fail |md_all$reads_duplicated_fail |
+                         !md_all$reads_mapped_valid | !md_all$reads_duplicated_valid)
+n_mqc_warn <- sum(md_all$reads_mapped_warn |md_all$reads_duplicated_warn |
+                         !md_all$reads_mapped_valid | !md_all$reads_duplicated_valid)
+
+
+# add back in later
+#**MutliQC failures:** `r n_mqc_fail` sample(s)
+
+#**MutliQC warnings:** `r n_mqc_warn` sample(s)
+
+```
+
+
+
+```{r multiqc-table-failures, warning=FALSE, message=FALSE}
+meta_sub_warn <- subset(md_all, reads_mapped_warn | reads_duplicated_warn |
+                     !reads_mapped_valid | !reads_duplicated_valid) |>
+  dplyr::select(specimenID, tissue, tissue2, reads_mapped_warn, reads_duplicated_warn,
+         reads_mapped_valid, reads_duplicated_valid) |>
+  dplyr::mutate(
+    `Reads Mapped` = case_when(
+      !reads_mapped_valid ~ "FAIL",
+      reads_mapped_warn ~ "WARN",
+      .default = "."
+    ),
+    `Reads Duplicated` = case_when(
+      !reads_duplicated_valid ~ "FAIL",
+      reads_duplicated_warn ~ "WARN",
+      .default = "."
+    )
+  ) |>
+  dplyr::select(specimenID, tissue2, `Reads Mapped`, `Reads Duplicated`) |>
+  dplyr::rename(Tissue = tissue2) |>
+  dplyr::arrange(Tissue, specimenID)
+
+meta_sub_fail <- subset(md_all, reads_mapped_fail | reads_duplicated_fail |
+                          !reads_duplicated_valid |!reads_duplicated_warn) |>
+  dplyr::select(specimenID, tissue, tissue2, reads_mapped_fail, reads_duplicated_fail,
+        reads_mapped_valid, reads_duplicated_valid) |>
+  dplyr::mutate(
+    `Reads Mapped` = case_when(
+      reads_mapped_fail ~ "FAIL",
+    # !reads_mapped_valid ~ "WARN",
+      .default = "."
+    ),
+    `Reads Duplicated` = case_when(
+      reads_duplicated_fail ~ "FAIL",
+     # !reads_duplicated_valid ~ "WARN",
+      .default = "."
+    )
+  ) |>
+  dplyr::select(specimenID, tissue2, `Reads Mapped`, `Reads Duplicated`) |>
+  dplyr::filter(`Reads Mapped` != "." | `Reads Duplicated` != ".") |>
+  dplyr::rename(Tissue = tissue2, `Specimen ID` = specimenID) |>
+  dplyr::arrange(Tissue, `Specimen ID`)
+
+## Create the table for failures by sample
+kable(meta_sub_fail, format = "html", caption = "Samples not meeting MultiQC thresholds (failed QC)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444")
+## Create a table for warnings grouped by tissue type
+# 1. Group by tissue and "collapse" the IDs into a single string
+tab_summary2 <- meta_sub_warn %>%
+  group_by(Tissue) %>%
+  summarize(
+    Count = n(),
+    # 'collapse' is the magic argument that turns a list into a comma-separated string
+    SpecimenIDs = paste(specimenID, collapse = ", ")
+  )
+
+# 2. Format as a clean table
+tab_summary2 %>%
+  kable(format = "html", caption = "Samples flagged as MultiQC warning by Specimen IDs and Tissue Type") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
+  # Crucial: Set a width for the long ID column so it wraps text
+  column_spec(3, width = "15cm")
+
+```
+
+
+
+# Final samples that passed QC
+
+```{r saving-rdata-final-QC-tables-part1-tablesetup, warning=FALSE, message=FALSE}
+
+sex_fail <- meta_sub_sex$`Specimen ID`[meta_sub_sex$QC == "Discordant"]
+sex_warn <- meta_sub_sex$`Specimen ID`[meta_sub_sex$QC == "Flagged"]
+#pca_fail <- pca_final2$specimenID
+RIN_fail <- md_all_RIN_na$specimenID
+RIN_warn <- md_all_RIN_WARN$specimenID
+multiqc_fail <- meta_sub_fail$`Specimen ID`
+multiqc_warn <- meta_sub_warn$specimenID
+fastqc_phred_fail <- meta_sub_fastqc$`Specimen ID`[meta_sub_fastqc$`Phred Score` == "FAIL"]
+fastqc_phred_warn <- meta_sub_fastqc$`Specimen ID`[meta_sub_fastqc$`Phred Score` == "WARN"]
+fastqc_base_warn <- meta_sub_fastqc$`Specimen ID`[meta_sub_fastqc$`Base Content` == "WARN"]
+
+exclude_ids <- unique(c(RIN_fail, multiqc_fail, sex_fail, sex_warn, fastqc_phred_fail  ))
+exclude_ids_warn <- unique(c(multiqc_warn, RIN_warn, fastqc_phred_warn, fastqc_base_warn))
+
+#exclude_ids <- unique(c(pca_fail, RIN_fail, sex_fail, sex_warn ))
+#exclude_ids_warn <- unique(c(RIN_warn))
+
+
+md_valid <- md_all %>%
+  mutate(
+    valid = case_when(
+      specimenID %in% exclude_ids      ~ "FAIL",
+      specimenID %in% exclude_ids_warn ~ "WARN",
+      TRUE                             ~ "PASS"  # "TRUE" acts as the 'else' catch-all
+    )
+  )
+#table(md_valid$valid, useNA="always")
+
+n_passes <- table(md_valid$tissue2, md_valid$valid)
+colnames(n_passes) <- c("Fail", "Pass", "Warn")
+
+failures <- subset(md_valid, valid == "FAIL")
+warn <- subset(md_valid, valid == "WARN")
+fail_warn <- subset(md_valid, valid == "FAIL" | valid == "WARN")
+md_valid_qc <- subset(md_valid, valid == "PASS" | valid == "WARN")
+
+## saving .rds with QC'd data
+counts <- counts[, md_valid_qc$specimenID]
+
+#multiqc_stats <- subset(multiqc_stats, specimenID %in% md_valid$specimenID)
+#fastqc_basic_stats <- subset(fastqc_data$basic_statistics, specimenID %in% md_valid$specimenID)
+
+# Remove genes that are all 0's
+zeros <- rowSums(counts) == 0
+#table(zeros)
+
+```
+**`r nrow(md_valid_qc)` of `r nrow(md_all)` samples passed QC.** 
+
+```{r final-QC-tables-part2-crosstabs-and-summary, warning=FALSE, message=FALSE}
+
+tab_data2 <- as.data.frame.matrix(table(md_valid$tissue2, md_valid$valid))
+tab_data2 %>% kable(format = "html", caption = "Samples by QC status") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = F, position = "left") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444")
+
+# 1. Group by tissue and "collapse" the IDs into a single string
+tab_summary <- failures %>%
+  group_by(tissue2) %>%
+  summarize(
+    Count = n(),
+    # 'collapse' is the magic argument that turns a list into a comma-separated string
+    SpecimenIDs = paste(specimenID, collapse = ", ")
+  )
+
+# 2. Format as a clean table
+tab_summary %>%
+  kable(format = "html", caption = "Samples that failed QC by Tissue Type and Specimen ID",
+                col.names = c("Tissue", "Count", "Specimen ID")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") 
+
+```
+
+``` {r final-QC-tables-part3-details-failed-QC, warning=FALSE, message=FALSE}
+
+#failures_detail <- fail_warn %>%
+#  dplyr::select(specimenID, tissue2, valid) %>%
+#  dplyr::mutate(
+#    `Sex check` = ifelse(fail_warn$specimenID %in% sex_fail, "FAIL", "."),
+#    `PCA check` = ifelse(fail_warn$specimenID %in% pca_fail, "FAIL", "."),
+#    `RIN check` = ifelse(fail_warn$specimenID %in% RIN_fail, "FAIL", "."),
+#    `RIN < 2.5` = ifelse(fail_warn$specimenID %in% RIN_warn, "WARN", "."),
+#    `MultiQC fail` = ifelse(fail_warn$specimenID %in% multiqc_fail, "FAIL", "."),
+#    `MultiQC warn` = ifelse(fail_warn$specimenID %in% multiqc_warn, "WARN", ".")) %>%
+#  dplyr::select(specimenID, tissue2, `Sex check`, `PCA check`, `RIN check`, `RIN < 2.5`, `MultiQC fail`, `MultiQC warn) %>%
+#  dplyr::rename(Tissue = tissue2) %>%
+#  dplyr::arrange(Tissue, specimenID)
+
+failures_detail2 <- fail_warn |>
+  dplyr::select(specimenID, tissue2, valid) |>
+  dplyr::mutate(
+    `Sexfail` = ifelse(specimenID %in% sex_fail, "FAIL", "."),
+    `Sexwarn` = ifelse(specimenID %in% sex_warn, "FAIL", "."),
+   # `PCAfail` = ifelse(specimenID %in% pca_fail, "FAIL", "."),
+    `RINmissing` = ifelse(specimenID %in% RIN_fail, "FAIL", "."),
+    `MultiQCfail` = ifelse(specimenID %in% multiqc_fail, "FAIL", "."),
+    `MultiQCwarn` = ifelse(specimenID %in% multiqc_warn, "WARN", "."),
+    `FastQCfail` = ifelse(specimenID %in% fastqc_phred_fail, "FAIL", "."),
+    `FastQCwarn1` = ifelse(specimenID %in% fastqc_phred_warn, "WARN", "."),
+    `FastQCwarn2` = ifelse(specimenID %in% fastqc_base_warn, "WARN", ".")
+  ) |>
+  dplyr::select(specimenID, tissue2, `Sexfail`, `Sexwarn`,  `RINmissing`, `MultiQCfail`,`MultiQCwarn`,`FastQCfail`,`FastQCwarn1`,`FastQCwarn2`) |>
+  dplyr::filter(if_any(c(`Sexfail`, `Sexwarn`, `RINmissing`, `MultiQCfail`,`FastQCfail`), ~ .x == "FAIL") | if_any(c(`Sexwarn`), ~ .x == "FLAG")) |>
+  dplyr::rename(Tissue = tissue2) |>
+  arrange(Tissue, specimenID)
+
+
+failures_detail2 %>%
+  kable(format = "html", caption = paste("Details of why each of ", nrow(failures_detail2), " sample(s) failed QC. Added MultiQC and FastQC warning flags to existing QC failures, but these samples were not not excluded. Sample flagged as outliers for inferred sex were excluded, but shown separately from discordant failed samples.", sep=""),
+        col.names = c("Specimen ID", "Tissue", "Sex fail", "Sex outlier", 
+                  "RIN missing", "MultiQC fail", "MultiQC warn", "FastQC Phred fail",  
+                  "FastQC phred warn", "FastQC base content warn")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+              fixed_thead = TRUE) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
+  scroll_box(width = "100%", height = "500px")
+
+```
+
+
+# Metadata and clean counts
+
+Uploaded to synapse: "MSBB_md_counts.rds", parent = "syn76814282"
+
+*`r nrow(md_valid_qc)` sample(s)*
+
+*`r nrow(counts)` genes(s)*
+
+```{r write synapse rds, eval=FALSE}
+data_final <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ])
+                   #"multiqc_stats" = multiqc_stats,
+                   #"fastqc_stats" = fastqc_basic_stats)
+output_filename <- "MSBB_md_counts.rds"
+saveRDS(data_final, file = output_filename)
+synapse_file_object <- File(path = "MSBB_md_counts.rds", parent = "syn76814282")
+synStore(synapse_file_object)
+```
+
+
+# CQN normalization
+
+Final cqn outputs uploaded to synapse: "MAYO_md_counts_cqn.rds", parent = "syn76814282"
+
+
+**Library preparation bias:** Library preparation method is a systematic technical covariate that affects GC content and gene length biases because these curves are not constant across library prep methods.
+
+```{r cqn, fig.width=12, fig.height=10, echo=FALSE, warning=FALSE}
+invisible(synLogin(silent=TRUE))
+file_entity <- synGet("syn76887997") # msbb_md_counts.rds syn76887997 "metadata" and "counts" 
+invisible(list2env(readRDS(file_entity$path), envir = .GlobalEnv))
+
+#dim(counts)
+md <- metadata
+
+
+library(cqn)
+# Align samples 
+syn_gene_file <- synapser::synGet('syn74907403') #universal for all studies - just gene data
+gene_info_path <- read.csv(syn_gene_file$path)
+gene_info_path <- gene_info_path %>% dplyr::rename(gene_id = ensembl_gene_id, gc_content = percent_gc_content, length = gene_length)
+rownames(gene_info_path) <- gene_info_path$gene_id
+
+gene_var  <- intersect(rownames(counts), gene_info_path$gene_id)
+gene_info_path2 <- gene_info_path[gene_info_path$gene_id %in% gene_var,]
+rownames(gene_info_path2) <- gene_info_path2$gene_id
+
+cqn_fit <- cqn(
+  counts     = counts,
+  x          = gene_info_path2$gc_content,      # per-gene GC fraction
+  lengths    = gene_info_path2$length,         # per-gene length
+  sizeFactors = colSums(counts))
+
+cqnplot(cqn_fit, n = 1, xlab = "GC content", ylab = "QR fit", main=paste("CQN"))
+cqnplot(cqn_fit, n = 2, xlab = "Length (log2)", ylab = "QR fit", main=paste("CQN"))
+
+# CQN offset = glm.offset (combined log-scale offset)
+cqn_offsets <- cqn_fit$glm.offset 
+cqn_E <- cqn_fit$y + cqn_fit$offset 
+
+```
+
+
+```{r cqn function with output, eval=TRUE, warning=FALSE, include=FALSE}
+# -- 1. Incorporate into limma-voom
+# ── 2. Build DGEList and attach CQN offset ────────────────────────────────────
+library(limma)
+library(edgeR)
+invisible(synLogin(silent=TRUE))
+dge_cqn <- DGEList(counts = counts)
+dge_cqn <- calcNormFactors(dge_cqn, method = "none")  # skip TMM; CQN handles bias
+dge_cqn$offset <- cqn_offsets
+dge_cqn$E <- cqn_E
+
+dge_cqn_df <- as.data.frame(dge_cqn)
+dge_cqn_row <- rownames(dge_cqn)
+#dge_cqn_df[1:5,1:5]
+rownames(dge_cqn_df) <- dge_cqn_row
+#dge_cqn_df[1:5,1:5]
+
+cqn_save <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ], "dge_cqn" = dge_cqn, "dge_cqn_df" = dge_cqn_df)
+output_filename <- "MSBB_md_counts_cqn.rds"
+saveRDS(cqn_save , file = output_filename)
+synapse_file_object <- File(path = "MSBB_md_counts_cqn.rds", parent = "syn76814282")
+synStore(synapse_file_object)
+
+```
+
+
+# Full data demographics (all tissues)
+
+```{r final demo table}
+# Show sample numbers for modelling by diagnosis, tissue, and sex
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+
+# Prepare frequency counts wide by sex
+demo_summary <- md_valid_qc %>%
+  dplyr::mutate(diag2 = factor(diag2, levels = c("AD2", "CT2", "OTHER2"))) %>%
+   dplyr::mutate(tissue2 = factor(tissue2, levels = c("FP", "PC", "IFG", "PG" ,"STG"))) %>%
+  dplyr::count(tissue2, diag2, sex) %>%
+  pivot_wider(
+    names_from = sex,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  arrange(tissue2, diag2)
+
+num_cols <- ncol(demo_summary %>% dplyr::select(-tissue2))
+
+# Generate styled table
+kable(
+  demo_summary %>% dplyr::select(-tissue2), 
+  format = "html", 
+  col.names = c("Diagnosis", names(demo_summary)[-(1:2)]),
+  caption = "Sample Counts by Diagnosis and Sex across Tissues"
+) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
+  column_spec(1:num_cols, width = "100px") %>%
+  pack_rows(index = table(demo_summary$tissue2)) # Groups rows by Tissue
+
+```
+
+# RNA metrics PCs 
+
+Ran RAN metrics as principal components to account for technical variation, ran on FP, IFG, PG, and STG only since FC will not be in full model due to sample size
+
+
+```{r RNA metrics as PCA vectors, fig.height=20, fig.width=20}
+# RNA metrics as principal components / PCA of technical metrics
+md_metrics <- md_valid_qc[md_valid_qc$tissue2 != "PC",]
+
+# "X..of.chimeric.reads" dropped because all valaues were zero - all other retained
+metric_cols2 <- c("picard_UNPAIRED_READS_EXAMINED"  ,        "picard_READ_PAIRS_EXAMINED"  ,    
+"picard_UNMAPPED_READS"                      ,      "picard_PERCENT_DUPLICATION"                      ,
+"picard_READS_UNMAPPED"                       ,     "rsem_alignable_percent"                          ,
+"rsem_uniquely_aligned_percent"                ,    "samtools_reads_mapped"                           ,
+"samtools_reads_duplicated"                     ,   "samtools_error_rate"                             ,
+"samtools_average_length"                 ,         "samtools_average_quality"                        ,
+"samtools_insert_size_average"             ,        "samtools_percentage_of_properly_paired_reads_...",
+"samtools_reads_mapped_percent"             ,       "samtools_reads_mapped_and_paired_percent"        ,
+"samtools_reads_properly_paired_percent"     ,      "samtools_reads_duplicated_percent"               ,
+"samtools_percent_mapped_X"                   ,     "samtools_percent_mapped_Y"                       ,
+"cutadapt_percent_trimmed"                  ,    "Average.input.read.length"                       ,
+"Uniquely.mapped.reads.."                        ,  "Number.of.splices..GT.AG"                        ,
+"Number.of.splices..GC.AG"                        , "Number.of.splices..AT.AC"                        ,
+"Mismatch.rate.per.base..."   ,                     "Deletion.rate.per.base"                          ,
+"Insertion.rate.per.base"      ,                    "X..of.reads.mapped.to.multiple.loci"             ,
+"X..of.reads.mapped.to.too.many.loci",              "X..of.reads.unmapped..too.many.mismatches"       ,
+"X..of.reads.unmapped..too.short"     ,             "X..of.reads.unmapped..other"                     )
+
+## adding in technical covariates ----
+# RNA metrics described using PCA
+## RNA metrics PCA to account for technical variability across batches
+#metric_cols <- colnames(md_metrics[,c(33:69)])
+#results_metrics <- compare_methods(md,metric_cols)
+#sig_metrics <- results_metrics %>% filter(p_adj < 0.05) %>% arrange(p_adj) %>% pull(metric)
+#cat("Significant metrics (FDR < 0.05):", length(sig_metrics), "\n")
+
+#rownames(md) <- NULL
+
+library(Polychrome)
+p_colors <- glasbey.colors(19)[-1] #removes first color which is white
+my_shapes <- c(1:19)
+
+
+# ── p3: PC1 vs PC2 scores, coloured by library prep ─────────────────────────
+rownames(md_metrics) <- md_metrics$specimenID
+spec_vars<-md_metrics$specimenID
+metric_cols_mat <- md_metrics[,metric_cols2]
+metric_cols_mat <- as.data.frame(metric_cols_mat)
+
+## may drop later - from here
+# Select columns where sum is 0 as a check
+ck_col <- metric_cols_mat %>% dplyr::select(where(~ sum(.x, na.rm = TRUE) == 0))
+
+# Drop columns where sum is 0
+metric_cols_mat <- metric_cols_mat  %>% dplyr::select(where(~ sum(.x, na.rm = TRUE) != 0))
+ck_row <- metric_cols_mat[which(rowSums(metric_cols_mat, na.rm = TRUE) == 0)]
+
+# Find columns where standard deviation is zero (or NA)
+zero_var_cols <- apply(metric_cols_mat, 2, function(col) sd(col, na.rm = TRUE) == 0)
+zero_var <- names(zero_var_cols)[which(zero_var_cols)]
+
+# Keep only columns with variance > 0
+valid_cols <- apply(metric_cols_mat, 2, function(col) sd(col, na.rm = TRUE) > 0)
+pca_clean  <-metric_cols_mat[, valid_cols]
+
+#clean_mat2 <- na.omit(pca_clean)
+#pca_miss <- pca_clean [!complete.cases(pca_clean ), ]
+#star_miss <- combined_star [!complete.cases(combined_star ), ]
+## may drop later - to here
+
+
+metric_cols_mat_t <- t(pca_clean)
+colnames(metric_cols_mat_t) <- spec_vars
+#sum(is.na(metric_cols_mat_t))     # Counts NA and NaN
+#sum(is.infinite(metric_cols_mat_t)) # Counts Inf and -Inf
+
+#cols_with_na  <- colnames(metric_cols_mat_t)[colSums(is.na(metric_cols_mat_t)) > 0]
+
+outlier_list <- list()
+pca_result_outliers <- run_pca_outliers2(metric_cols_mat_t,
+                                         md_metrics,
+                                          center = TRUE,
+                                          scale = TRUE)
+pca_df <- as.data.frame(pca_result_outliers$scores[,c("specimenID", "PC1","PC2","PC3","PC4","PC5","PC6","is_outlier")])
+
+id_outliers <- pca_result_outliers$outliers$specimenID
+id_outliers_db <- md_metrics[md_metrics$specimenID %in% id_outliers,]
+
+pca_var <- as.data.frame(pca_result_outliers$var_explained)
+pca_var$PC <- rownames(pca_var)
+pca_var$variance <- pca_var$'pca_result_outliers$var_explained'
+pca_var <- pca_var %>% select(-'pca_result_outliers$var_explained') 
+pca_var <- pca_var[1:10,]
+
+pca_var %>%
+  kable(format = "html", caption = "Variance explained by top PCs",
+        col.names = c("PC", "variance"),
+        row.names = FALSE
+        ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+              fixed_thead = TRUE) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
+  scroll_box(width = "25%", height = "100%", extra_css = "max-height: 500px; margin: 0 auto;") %>%
+  # Crucial: Set a width for the long ID column so it wraps text
+  column_spec(1, width = "2cm")
+
+
+p1 <- plot_pca(pca_result_outliers, "PC1", "PC2", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p2 <- plot_pca(pca_result_outliers, "PC1", "PC3", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+
+ 
+p3a <- plot_pca(pca_result_outliers, "PC1", "PC2", "dataContributingGroup" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+
+# ── p4: loadings — which metrics drive each PC ───────────────────────────────
+p4 <- plot_pca_loadings3(pca_result_outliers, pcs = c("PC1", "PC2", "PC3"))
+#ggsave(paste("PCA_loadings_both_sexes_DLPFC.png",sep=""), plot =p4, width = 15, height = 10, dpi = 150)
+
+# ── p5: scree plot ────────────────────────────────────────────────────────────
+p5 <- plot_scree(pca_result_outliers)
+#ggsave(paste("PCA_scree_both_sexes_DLPFC.png",sep=""), plot =p5, width = 15, height = 10, dpi = 150)
+
+#png("~/ROSMAP_DLPFC_CN_PCC_RNA_metrics_30July2026.png", width = 1700, height = 1900)
+library(patchwork)
+plot_list <- list(p1,p2,p4,p5) 
+wrap_plots(plot_list, nrow = 2, ncol = 2)
+#dev.off()
+
+
+
+#plot_list2 <- list(p4,p5) 
+#wrap_plots(plot_list2, nrow = 1, ncol = 2)
+
+# metrics_pcs 
+metrics_pca_df <- pca_df %>% dplyr::rename(PC1_metrics = PC1, PC2_metrics = PC2, PC3_metrics = PC3, PC4_metrics = PC4, PC5_metrics = PC5, is_pc_metrics_outlier = is_outlier) %>% dplyr::select(specimenID, PC1_metrics, PC2_metrics, PC3_metrics, PC4_metrics, PC5_metrics, is_pc_metrics_outlier)
+#table(metrics_pca_df$is_pc_metrics_outlier)
+
+md_valid_qc_metrics_pca <- merge(md_valid_qc, metrics_pca_df, by="specimenID")
+md_valid_qc_metrics_pca <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outlier == FALSE)
+
+
+```
+
+
+
+```{r addition sample to drop}
+#id_outliers <- pca_result_outliers$outliers$specimenID
+#id_outliers_db <- md_valid_qc_metrics_pca[md_valid_qc_metrics_pca$specimenID %in% id_outliers,]
+
+addition_drop <- id_outliers_db %>%
+   dplyr::select(specimenID, tissue2, sex, diag2)
+
+#table(metrics_pca_df$is_pc_metrics_outlier)
+
+addition_drop %>%
+  kable(format = "html", 
+        caption = sprintf("Additional samples dropped due to being outliers (>4 sd) in RNA metrics PCA analysis (n = %d)",
+                           nrow(addition_drop)),
+        col.names = c("Specimen ID", "Tissue", "Sex", "Diag2"),
+        row.names = FALSE
+        ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+              fixed_thead = TRUE) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
+  scroll_box(width = "100%", height = "100%", extra_css = "max-height: 500px;") %>%
+  # Crucial: Set a width for the long ID column so it wraps text
+  column_spec(1, width = "4cm")
+
+```
+
+
+
+
+```{r prep of final files}
+md_all <- md_valid_qc_metrics_pca
+counts2 <- counts[,colnames(counts) %in% md_all$specimenID]
+
+# 1. Create a logical vector of matching columns
+keep_cols <- colnames(dge_cqn) %in% md_all$specimenID
+
+# 2. Subset the main DGEList object
+dge_cqn2 <- dge_cqn[, keep_cols]
+
+# 3. Explicitly subset the custom $E matrix
+dge_cqn2$E <- dge_cqn2$E[, keep_cols]
+
+dge_cqn_df2 <- dge_cqn_df[,colnames(dge_cqn_df) %in% md_all$specimenID]
+```
+
+# Final analytic dataset and models
+
+**Final analytic dataset: `r nrow(md_all)` sample(s) after dropping 12 PC samples and `r nrow(addition_drop)` samples that were RNA metrics outliers**
+
+**`r nrow(counts2)` genes(s)**
+
+<br>
+
+**Demographics for FP, TFG, PG, and STG (for gene expression models)**
+
+
+
+```{r final demographics}
+
+# Prepare frequency counts wide by sex
+demo_summary3 <- md_all %>%
+  dplyr::mutate(diag2 = factor(diag2, levels = c("AD2", "CT2", "OTHER2"))) %>%
+   dplyr::mutate(tissue2 = factor(tissue2, levels = c("FP", "IFG", "PG", "STG"))) %>%
+  dplyr::count(tissue2, diag2, sex) %>%
+  pivot_wider(
+    names_from = sex,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  arrange(tissue2, diag2)
+
+num_cols <- ncol(demo_summary3 %>% dplyr::select(-tissue2))
+
+# Generate styled table
+kable(
+  demo_summary3 %>% dplyr::select(-tissue2), 
+  format = "html", 
+  col.names = c("Diagnosis", names(demo_summary3)[-(1:2)]),
+  caption = "Final sample Counts by Diagnosis and Sex across Tissues"
+) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
+  column_spec(1:num_cols, width = "150px") %>%
+  pack_rows(index = table(demo_summary3$tissue2)) %>%
+  # Custom CSS to prevent caption wrapping and reduce table wrapper margin/width
+  scroll_box(
+    width = "auto", 
+    extra_css = "display: inline-block; margin-right: 0px;"
+  ) %>%
+  # Apply inline style to force the caption to stay on one line
+  row_spec(0, extra_css = "caption { white-space: nowrap; text-align: left; }")
+```
+
+
+```{r FINAL FILES to synapse, include=FALSE}
+invisible(synLogin(silent=TRUE))
+cqn_save2 <- list("metadata" = md_all, "counts" = counts2, "dge_cqn" = dge_cqn2, "dge_cqn_df" = dge_cqn_df2)
+output_filename2 <- "MSBB_md_counts_cqn_FINAL.rds"
+saveRDS(cqn_save2 , file = output_filename2)
+synapse_file_object2 <- File(path = "MSBB_md_counts_cqn_FINAL.rds", parent = "syn76814282")
+synStore(synapse_file_object2)
+```
+
