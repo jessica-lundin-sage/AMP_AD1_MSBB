@@ -33,7 +33,7 @@ DE_QC_MSBB_26Aug2026.Rmd  #here for reference but not longer used
    Correlation of model PCs with covariates
 
 On AWS:
-DE_with_built_interaction_no_svs.R 
+DE_FINAL.R 
   output "ROSMAP_DE_final.rds" (syn76557299) contains:
       "metadata" = md_sv, 
       "vobj_expr" = voom_gene_expression, 
@@ -46,8 +46,6 @@ DE_with_built_interaction_no_svs.R
       "females_PCC6" = females_PCC6, 
       "males_CN6" = males_CN6, 
       "females_CN6" = females_CN6
-   Brings in ROSMAP_md_counts_cqn_DLPFC_CN_PCC_FINAL.rds ("metadata", "counts", "dge_cqn", "dge_cqn_df") (syn76553509)  
-
       
 On AWS:
 DE_Residuals_for_sharing.R
@@ -60,9 +58,6 @@ DE_Residuals_for_sharing.R
       "residual_gene_expression" = residual_gene_expression (residuals from dream())
    
    
-   form_ck <- ~ 0 + group  + apoe4Status + age_cat + (1|individualID)
-       How group was defined: md_sv$group <- interaction(md_sv$diagnosis, md_sv$sex, md_sv$tissue2, drop = TRUE)
-                              group <- interaction(md_sv$diagnosis, md_sv$sex, md_sv$tissue2, drop = TRUE)
    "ROSMAP_DE_res2.rds" (syn76565771) contains: 
       "metadata_res3" = md_sv, 
       "fit_res2.dream" = fit_res2 (dream() with residualized counts, formula with additional vars (form_ck), and tissue X sex X diagnosis contrasts), 
@@ -74,29 +69,7 @@ DE_Residuals_for_sharing.R
       "males_CN6_res3" = males_CN6, 
       "females_CN6_res3" = females_CN6
  
-On local (moved to be part of QC Markdown):
-DE_residualized_plots_by_final_batch.R
-    Run PCA on residualized data with overlay markers for sex and diagnosis - plots output in Rmd
-
-
-    
+   
 Technical variables
-  technical_stats_multiqc_star.R (syn76227881) Output: MSBB_multiqc_star_technical_stats.csv
-  technical_stats_fastqc.R (syn76283403) [run on AWS] (ROSMAP_fq_stats.rds contains: basic_stats.txt, phred_per_base.txt, base_content.txt) 
-
-      
-      
-      
-Helpful links:
-https://ucdavis-bioinformatics-training.github.io/2018-June-RNA-Seq-Workshop/thursday/DE.html
-https://diseaseneurogenomics.github.io/variancePartition/articles/dream.html
-https://github.com/DiseaseNeuroGenomics/variancePartition/blob/HEAD/R/dream.R
-https://github.com/Sage-Bionetworks/amp-rnaseq
-https://github.com/Sage-Bionetworks/ampad-rnaseq-reprocessing/tree/main/code/metadata_preprocessing
-https://github.com/Sage-Bionetworks/sageseqr/blob/master/R/functions.R
-https://github.com/Sage-Bionetworks/ampad-DiffExp/blob/master/gene_level_analysis/MAYO_geneLevel_TMM.Rmd
-https://github.com/Sage-Bionetworks/sageseqr/blob/master/R/functions.R
-
-
-
-
+  technical_stats_multiqc_star.R  Output: MSBB_multiqc_star_technical_stats.csv
+  technical_stats_fastqc.R [run on AWS] (MSBB_fq_stats.rds contains: basic_stats.txt, phred_per_base.txt, base_content.txt) 
