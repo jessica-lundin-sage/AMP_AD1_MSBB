@@ -78,6 +78,7 @@ rownames(counts) <- counts$gene_id
 counts_sex_ck <- counts
 counts <- counts[!(counts$gene_id %in% delete_var2),]
 
+# some sample were sequeced twice - kept the one with more mapped genes
 md_all <- md_all |>
   group_by(barcode) |>
   slice_max(mapped, n = 1, with_ties = FALSE) |>
@@ -92,7 +93,7 @@ counts  <- counts[, samples, drop = FALSE]
 md_all <- md_all[match(samples, md_all$specimenID), , drop = FALSE]
 rownames(md_all) <- md_all$specimenID
 
-
+    
 #metadata <- md_all
 ```
 
@@ -137,11 +138,8 @@ wrap_plots(plot_list, nrow = 5, ncol = 2)
 
 # Descriptive: Technical covariates
 
-number of missing for PMI: `r length(md_all[is.na(md_all$PMI),])` 
 
-number of missing values for RIN: `r length(md_all[is.na(md_all$RIN),])` 
-
-```{r generate-technical-covariate-plots, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+```{r generate-technical-covariate-plots, warning=FALSE, message=FALSE, fig.width=12, fig.height=13}
 #make_bar_plot_batch(md_all, "procbatch")
 #make_bar_plot_batch(md_all, "libraryPrep")
 #make_bar_plot_batch(md_all, "final_batch")
@@ -814,13 +812,10 @@ Uploaded to synapse: "MSBB_md_counts.rds", parent = "syn76814282"
 *`r nrow(counts)` genes(s)*
 
 ```{r write synapse rds, eval=FALSE}
-data_final <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ])
-                   #"multiqc_stats" = multiqc_stats,
-                   #"fastqc_stats" = fastqc_basic_stats)
-output_filename <- "MSBB_md_counts.rds"
-saveRDS(data_final, file = output_filename)
-synapse_file_object <- File(path = "MSBB_md_counts.rds", parent = "syn76814282")
-synStore(synapse_file_object)
+#data_final <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ])
+#output_filename <- "MSBB_md_counts.rds"
+#saveRDS(data_final, file = output_filename)
+#synapse_file_object <- File(path = "MSBB_md_counts.rds", parent = "syn76814282")
 ```
 
 
@@ -833,11 +828,11 @@ Final cqn outputs uploaded to synapse: "MAYO_md_counts_cqn.rds", parent = "syn76
 
 ```{r cqn, fig.width=12, fig.height=10, echo=FALSE, warning=FALSE}
 invisible(synLogin(silent=TRUE))
-file_entity <- synGet("syn76887997") # msbb_md_counts.rds syn76887997 "metadata" and "counts" 
-invisible(list2env(readRDS(file_entity$path), envir = .GlobalEnv))
+#file_entity <- synGet("syn76887997") # msbb_md_counts.rds syn76887997 "metadata" and "counts" 
+#invisible(list2env(readRDS(file_entity$path), envir = .GlobalEnv))
 
 #dim(counts)
-md <- metadata
+#md <- metadata
 
 
 library(cqn)
