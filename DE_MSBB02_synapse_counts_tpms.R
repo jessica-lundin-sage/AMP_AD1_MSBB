@@ -14,11 +14,11 @@ synLogin()
 
 # get functions from git
 urls <- c("https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_filter_low_count_genes.R")
-walk(urls, function(u) {
-  resp <- GET(u, add_headers(Authorization = paste("token", Sys.getenv("GITHUB_PAT"))))
-  stop_for_status(resp)
+purrr::walk(urls, function(u) {
+  resp <- httr::GET(u, httr::add_headers(Authorization = paste("token", Sys.getenv("GITHUB_PAT"))))
+  httr::stop_for_status(resp)
   tmp <- tempfile(fileext = ".R")
-  writeLines(content(resp, "text", encoding = "UTF-8"), tmp)
+  writeLines(httr::content(resp, "text", encoding = "UTF-8"), tmp)
   source(tmp)
 })
 

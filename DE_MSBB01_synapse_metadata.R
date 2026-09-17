@@ -14,6 +14,7 @@ synLogin()
 
 ### pulling metadata from synapse ----
 MSBB_meta_ind <- read.csv(synapser::synGet('syn73713767')$path, stringsAsFactors = F, check.names = FALSE) #from metadata harmonization study
+MSBB_dx_prev <- read.csv(synapser::synGet('syn77471281')$path, stringsAsFactors = F, check.names = FALSE) #from metadata harmonization study
 MSBB_meta_ind <- merge(MSBB_meta_ind, MSBB_dx_prev, by="individualID") # adding in diagnosis_previous from "DE_MSBB_check_prev_md.R"
 
 MSBB_meta_biosp <- read.csv(synapser::synGet('syn21893059')$path, stringsAsFactors = F, check.names = FALSE)
