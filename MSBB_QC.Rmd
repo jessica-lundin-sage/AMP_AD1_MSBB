@@ -34,14 +34,15 @@ urls <- c(
   "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_sex_prediction.R",
   "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_pca_outliers.R",
   "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_RNA_metric_PCA.R",
-  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_JB_fastqc_multiqc.R"
+  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_JB_fastqc_multiqc.R",
+  "https://raw.githubusercontent.com/jessica-lundin-sage/pers_Lundin/main/RNASeq_DE/AMP_AD1/functions/functions_tech_vars_RNA_metrics.R"
   )
 
-walk(urls, function(u) {
-  resp <- GET(u, add_headers(Authorization = paste("token", Sys.getenv("GITHUB_PAT"))))
-  stop_for_status(resp)
+purrr::walk(urls, function(u) {
+  resp <- httr::GET(u, httr::add_headers(Authorization = paste("token", Sys.getenv("GITHUB_PAT"))))
+  httr::stop_for_status(resp)
   tmp <- tempfile(fileext = ".R")
-  writeLines(content(resp, "text", encoding = "UTF-8"), tmp)
+  writeLines(httr::content(resp, "text", encoding = "UTF-8"), tmp)
   source(tmp)
 })
 ```
@@ -78,12 +79,15 @@ rownames(counts) <- counts$gene_id
 counts_sex_ck <- counts
 counts <- counts[!(counts$gene_id %in% delete_var2),]
 
-# some sample were sequeced twice - kept the one with more mapped genes
+# some sample were sequenced twice - kept (1) the one with the higher RIN value, when RIN tied, kept the one with a higher number of aligned reads 
 md_all <- md_all |>
   group_by(barcode) |>
-  slice_max(mapped, n = 1, with_ties = FALSE) |>
+  slice_max(RIN, n = 1, with_ties = TRUE) |>
   ungroup()
-
+md_all <- md_all |>
+  group_by(barcode) |>
+  slice_max(rsem_Alignable, n = 1, with_ties = TRUE) |>
+  ungroup()
 
 # Align samples 
 samples  <- intersect(colnames(counts), md_all$specimenID)
@@ -93,7 +97,7 @@ counts  <- counts[, samples, drop = FALSE]
 md_all <- md_all[match(samples, md_all$specimenID), , drop = FALSE]
 rownames(md_all) <- md_all$specimenID
 
-    
+length(unique(md_all$barcode))    
 #metadata <- md_all
 ```
 
@@ -805,23 +809,24 @@ failures_detail2 %>%
 
 # Metadata and clean counts
 
-Uploaded to synapse: "MSBB_md_counts.rds", parent = "syn76814282"
+Uploaded to synapse: "MSBB_md_counts.rds" (metadata and counts), parent = "syn76814282"
 
 *`r nrow(md_valid_qc)` sample(s)*
 
 *`r nrow(counts)` genes(s)*
 
-```{r write synapse rds, eval=FALSE}
-#data_final <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ])
-#output_filename <- "MSBB_md_counts.rds"
-#saveRDS(data_final, file = output_filename)
-#synapse_file_object <- File(path = "MSBB_md_counts.rds", parent = "syn76814282")
+```{r write synapse rds, eval=TRUE, echo=FALSE, include=FALSE}
+data_final <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ])
+output_filename <- "MSBB_md_counts.rds"
+saveRDS(data_final, file = output_filename)
+synapse_file_object <- File(path = "MSBB_md_counts.rds", parent = "syn76814282")
+synStore(synapse_file_object)
 ```
 
 
 # CQN normalization
 
-Final cqn outputs uploaded to synapse: "MAYO_md_counts_cqn.rds", parent = "syn76814282"
+Final cqn outputs uploaded to synapse: "MSBB_md_counts_cqn.rds", parent = "synxx"
 
 
 **Library preparation bias:** Library preparation method is a systematic technical covariate that affects GC content and gene length biases because these curves are not constant across library prep methods.
@@ -879,11 +884,11 @@ dge_cqn_row <- rownames(dge_cqn)
 rownames(dge_cqn_df) <- dge_cqn_row
 #dge_cqn_df[1:5,1:5]
 
-cqn_save <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ], "dge_cqn" = dge_cqn, "dge_cqn_df" = dge_cqn_df)
-output_filename <- "MSBB_md_counts_cqn.rds"
-saveRDS(cqn_save , file = output_filename)
-synapse_file_object <- File(path = "MSBB_md_counts_cqn.rds", parent = "syn76814282")
-synStore(synapse_file_object)
+#cqn_save <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ], "dge_cqn" = dge_cqn)
+#output_filename <- "MSBB_md_counts_cqn.rds"
+#saveRDS(cqn_save , file = output_filename)
+#synapse_file_object <- File(path = "MSBB_md_counts_cqn.rds", parent = "syn76814282")
+#synStore(synapse_file_object)
 
 ```
 
@@ -934,81 +939,69 @@ Ran RAN metrics as principal components to account for technical variation, ran 
 
 
 ```{r RNA metrics as PCA vectors, fig.height=20, fig.width=20}
+invisible(synLogin(silent=TRUE))
 # RNA metrics as principal components / PCA of technical metrics
 md_metrics <- md_valid_qc[md_valid_qc$tissue2 != "PC",]
 
-# "X..of.chimeric.reads" dropped because all valaues were zero - all other retained
-metric_cols2 <- c("picard_UNPAIRED_READS_EXAMINED"  ,        "picard_READ_PAIRS_EXAMINED"  ,    
-"picard_UNMAPPED_READS"                      ,      "picard_PERCENT_DUPLICATION"                      ,
-"picard_READS_UNMAPPED"                       ,     "rsem_alignable_percent"                          ,
-"rsem_uniquely_aligned_percent"                ,    "samtools_reads_mapped"                           ,
-"samtools_reads_duplicated"                     ,   "samtools_error_rate"                             ,
-"samtools_average_length"                 ,         "samtools_average_quality"                        ,
-"samtools_insert_size_average"             ,        "samtools_percentage_of_properly_paired_reads_...",
-"samtools_reads_mapped_percent"             ,       "samtools_reads_mapped_and_paired_percent"        ,
-"samtools_reads_properly_paired_percent"     ,      "samtools_reads_duplicated_percent"               ,
-"samtools_percent_mapped_X"                   ,     "samtools_percent_mapped_Y"                       ,
-"cutadapt_percent_trimmed"                  ,    "Average.input.read.length"                       ,
-"Uniquely.mapped.reads.."                        ,  "Number.of.splices..GT.AG"                        ,
-"Number.of.splices..GC.AG"                        , "Number.of.splices..AT.AC"                        ,
-"Mismatch.rate.per.base..."   ,                     "Deletion.rate.per.base"                          ,
-"Insertion.rate.per.base"      ,                    "X..of.reads.mapped.to.multiple.loci"             ,
-"X..of.reads.mapped.to.too.many.loci",              "X..of.reads.unmapped..too.many.mismatches"       ,
-"X..of.reads.unmapped..too.short"     ,             "X..of.reads.unmapped..other"                     )
+metric_col_perc <- c(
+"rsem_alignable_percent"                       ,
+"rsem_uniquely_aligned_percent"                ,
+"samtools_error_rate"                          ,
+"samtools_reads_mapped_percent"                ,
+"samtools_reads_duplicated_percent"            ,
+"samtools_reads_MQ0_percent"                   ,
+"samtools_percent_mapped_X"                    ,
+"samtools_percent_mapped_Y"                    ,
+"cutadapt_percent_trimmed"                     ,
+"Uniquely.mapped.reads.."                      ,
+"Mismatch.rate.per.base..."                    ,
+"X..of.reads.mapped.to.multiple.loci"          ,
+"X..of.reads.mapped.to.too.many.loci"          ,
+"X..of.reads.unmapped..too.many.mismatches"    ,
+"X..of.reads.unmapped..too.short"              ,
+"X..of.reads.unmapped..other"  )
 
-## adding in technical covariates ----
-# RNA metrics described using PCA
-## RNA metrics PCA to account for technical variability across batches
-#metric_cols <- colnames(md_metrics[,c(33:69)])
-#results_metrics <- compare_methods(md,metric_cols)
-#sig_metrics <- results_metrics %>% filter(p_adj < 0.05) %>% arrange(p_adj) %>% pull(metric)
-#cat("Significant metrics (FDR < 0.05):", length(sig_metrics), "\n")
+# selected based on PCs of counts associated with variability in with Technical Metrics
+# determining_technical_vars_for_RNA_metrics.R
+# ## MSBB
+md_cts <- readRDS(synGet("syn76887997")$path)                        # msbb_md_counts.rds
+msbb_tv <- select_technical_vars(
+   counts        = md_cts$counts,
+   metadata      = md_cts$metadata,
+   metrics       = read.csv(synGet("syn76845876")$path, stringsAsFactors = FALSE),
+   sample_filter = function(md) md$tissue2 != "PC",
+   min_var_explained  = 0.05,
+   n_top_genes   = 5000,
+   cor_cutoff    = 0.90,
+   verbose=FALSE,
+   plots=FALSE
+ )
+#msbb_tv$final_metrics
 
-#rownames(md) <- NULL
+selected_metrics <- msbb_tv$final_metrics
+
+#selected_metrics <- c("rsem_Multi", "rsem_uniquely_aligned_percent", "samtools_reads_duplicated_percent", "Uniquely.mapped.reads..", "Number.of.splices..AT.AC", "X..of.reads.mapped.to.multiple.loci")
+
 
 library(Polychrome)
 p_colors <- glasbey.colors(19)[-1] #removes first color which is white
 my_shapes <- c(1:19)
 
 
-# ── p3: PC1 vs PC2 scores, coloured by library prep ─────────────────────────
 rownames(md_metrics) <- md_metrics$specimenID
 spec_vars<-md_metrics$specimenID
-metric_cols_mat <- md_metrics[,metric_cols2]
+metric_cols_mat <- md_metrics[,selected_metrics]
+metric_cols_mat_log <- metric_cols_mat %>% mutate(across(where(is.numeric), log))
 metric_cols_mat <- as.data.frame(metric_cols_mat)
 
-## may drop later - from here
-# Select columns where sum is 0 as a check
-ck_col <- metric_cols_mat %>% dplyr::select(where(~ sum(.x, na.rm = TRUE) == 0))
-
-# Drop columns where sum is 0
-metric_cols_mat <- metric_cols_mat  %>% dplyr::select(where(~ sum(.x, na.rm = TRUE) != 0))
-ck_row <- metric_cols_mat[which(rowSums(metric_cols_mat, na.rm = TRUE) == 0)]
-
-# Find columns where standard deviation is zero (or NA)
-zero_var_cols <- apply(metric_cols_mat, 2, function(col) sd(col, na.rm = TRUE) == 0)
-zero_var <- names(zero_var_cols)[which(zero_var_cols)]
-
-# Keep only columns with variance > 0
-valid_cols <- apply(metric_cols_mat, 2, function(col) sd(col, na.rm = TRUE) > 0)
-pca_clean  <-metric_cols_mat[, valid_cols]
-
-#clean_mat2 <- na.omit(pca_clean)
-#pca_miss <- pca_clean [!complete.cases(pca_clean ), ]
-#star_miss <- combined_star [!complete.cases(combined_star ), ]
-## may drop later - to here
-
-
-metric_cols_mat_t <- t(pca_clean)
+metric_cols_mat_t <- t(metric_cols_mat_log)
 colnames(metric_cols_mat_t) <- spec_vars
-#sum(is.na(metric_cols_mat_t))     # Counts NA and NaN
-#sum(is.infinite(metric_cols_mat_t)) # Counts Inf and -Inf
 
-#cols_with_na  <- colnames(metric_cols_mat_t)[colSums(is.na(metric_cols_mat_t)) > 0]
 
 outlier_list <- list()
 pca_result_outliers <- run_pca_outliers2(metric_cols_mat_t,
                                          md_metrics,
+                                         var_cutoff = 15,
                                           center = TRUE,
                                           scale = TRUE)
 pca_df <- as.data.frame(pca_result_outliers$scores[,c("specimenID", "PC1","PC2","PC3","PC4","PC5","PC6","is_outlier")])
@@ -1019,7 +1012,7 @@ id_outliers_db <- md_metrics[md_metrics$specimenID %in% id_outliers,]
 pca_var <- as.data.frame(pca_result_outliers$var_explained)
 pca_var$PC <- rownames(pca_var)
 pca_var$variance <- pca_var$'pca_result_outliers$var_explained'
-pca_var <- pca_var %>% select(-'pca_result_outliers$var_explained') 
+pca_var <- pca_var %>% dplyr::select(-'pca_result_outliers$var_explained') 
 pca_var <- pca_var[1:10,]
 
 pca_var %>%
@@ -1040,6 +1033,11 @@ p2 <- plot_pca(pca_result_outliers, "PC1", "PC3", "tissue2" , title_var = c(past
 
  
 p3a <- plot_pca(pca_result_outliers, "PC1", "PC2", "dataContributingGroup" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p3b <- plot_pca(pca_result_outliers, "PC1", "PC2", "sequencingBatch" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+
+#p1
+#p3a
+#p3b
 
 # ── p4: loadings — which metrics drive each PC ───────────────────────────────
 p4 <- plot_pca_loadings3(pca_result_outliers, pcs = c("PC1", "PC2", "PC3"))
@@ -1051,8 +1049,8 @@ p5 <- plot_scree(pca_result_outliers)
 
 #png("~/ROSMAP_DLPFC_CN_PCC_RNA_metrics_30July2026.png", width = 1700, height = 1900)
 library(patchwork)
-plot_list <- list(p1,p2,p4,p5) 
-wrap_plots(plot_list, nrow = 2, ncol = 2)
+plot_list <- list(p1,p2,p3b,p4,p5) 
+wrap_plots(plot_list, nrow = 3, ncol = 2)
 #dev.off()
 
 
@@ -1066,7 +1064,7 @@ metrics_pca_df <- pca_df %>% dplyr::rename(PC1_metrics = PC1, PC2_metrics = PC2,
 
 md_valid_qc_metrics_pca <- merge(md_valid_qc, metrics_pca_df, by="specimenID")
 md_valid_qc_metrics_pca <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outlier == FALSE)
-
+md_valid_qc_metrics_pca_outlier <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outlier == TRUE)
 
 ```
 
@@ -1076,8 +1074,7 @@ md_valid_qc_metrics_pca <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outl
 #id_outliers <- pca_result_outliers$outliers$specimenID
 #id_outliers_db <- md_valid_qc_metrics_pca[md_valid_qc_metrics_pca$specimenID %in% id_outliers,]
 
-addition_drop <- id_outliers_db %>%
-   dplyr::select(specimenID, tissue2, sex, diag2)
+addition_drop <- id_outliers_db %>% dplyr::select(specimenID, tissue2, sex, diag2)
 
 #table(metrics_pca_df$is_pc_metrics_outlier)
 
@@ -1170,10 +1167,130 @@ kable(
 
 ```{r FINAL FILES to synapse, include=FALSE}
 invisible(synLogin(silent=TRUE))
-cqn_save2 <- list("metadata" = md_all, "counts" = counts2, "dge_cqn" = dge_cqn2, "dge_cqn_df" = dge_cqn_df2)
+cqn_save2 <- list("metadata" = md_all, "counts" = counts2, "dge_cqn" = dge_cqn2)
 output_filename2 <- "MSBB_md_counts_cqn_FINAL.rds"
 saveRDS(cqn_save2 , file = output_filename2)
-synapse_file_object2 <- File(path = "MSBB_md_counts_cqn_FINAL.rds", parent = "syn76814282")
+synapse_file_object2 <- File(path = "MSBB_md_counts_cqn_FINAL.rds", parent = "syn77539791")
 synStore(synapse_file_object2)
 ```
 
+
+<br>
+
+**Residualized data PCA by batch and diagnosis**
+
+Counts residualized on technical variables, formula: ~ PMI + RIN + PC1_metrics + PC2_metrics + PC3_metrics + (1|individualID) + (1|final_batch)
+
+```{r DE_residual_plots_by_final_batch_and_diagnosis, cache=TRUE, cache.lazy=FALSE}
+## plots of residualized data by batch and diagnosis
+# J Lundin
+# Aug 10 2026
+invisible(synLogin(silent=TRUE))
+
+file12 <- synGet("syn77564367") # msbb_md_res-counts_final.rds
+res12 <- readRDS(file12$path) 
+#ls(res12)
+res_counts <- res12$res_counts
+md_res <- res12$metadata
+
+#synLogin()
+# function at bottom - run first
+
+res <- run_pca_res(res_counts, md_res, "Residuals")
+
+p_res_batch <- pca_scatter_res(res$df, res$pct,
+                           colour_var = "final_batch",
+                           title      = "Residuals, colored by batch")
+
+p_res_cond  <- pca_scatter_res(res$df, res$pct,
+                           colour_var = "diagnosis",
+                           title      = "Residuals, colored by diagnosis")
+
+
+library(patchwork)
+plot_res <- list(p_res_batch, p_res_cond) 
+wrap_plots(plot_res, nrow = 1, ncol = 2)
+
+rm(residual_gene_expression)
+rm(md_res)
+rm(res12)
+invisible(gc())
+```
+
+
+
+
+**Differential expression model with all individual covariates compared with model residualized on technical variable data, all data and FDR<0.05**
+
+Both models use dream weights from voomwithDreamWeights, offsets from CQN normalization, and tissue X sex X diagnosis contrasts (group)
+
+_Full model:_ Final models with individual covariates, formula  ~ 0 + group + apoe4Status + age_cat + PMI + RIN + PC1_metrics + PC2_metrics + PC3_metrics + (1|final_batch) + (1|individualID)
+
+_Residualized matrix model:_ Final models run with counts residualized on technical variables, formula  ~ 0 + group + apoe4Status + age_cat + (1|individualID)
+
+```{r side-by-side-images2, echo=FALSE, out.width="49%", fig.show="hold", fig.align="default"}
+knitr::include_graphics(c("C:/Users/jlundin/OneDrive/git_code/RNASeq_DE/AMP_AD1/ALL_technical_provenance_staging/ALL_plots_from_AWS/MSBB_DE_full_vs_resid_all_contrasts.png"))
+```
+
+
+
+**Volcano plots of differential expression from models using residualized counts**
+
+```{r volcano-grid, fig.width=10, fig.height=10, echo=FALSE}
+invisible(synLogin(silent=TRUE))
+file1 <- synGet("syn77564606") # amp-ad-de-res_MSBB_sex_stratified.rds
+de <- readRDS(file1$path) 
+#ls(res)
+females_FP <- de$results[["AD_vs_CT_female.FP"]]
+males_FP <- de$results[["AD_vs_CT_male.FP"]]
+females_IFG <- de$results[["AD_vs_CT_female.IFG"]]
+males_IFG <- de$results[["AD_vs_CT_male.IFG"]]
+females_PG <- de$results[["AD_vs_CT_female.PG"]]
+males_PG <- de$results[["AD_vs_CT_male.PG"]]
+females_STG <- de$results[["AD_vs_CT_female.STG"]]
+males_STG <- de$results[["AD_vs_CT_male.STG"]]
+
+plot_volcano <- function(data, 
+                         title = "Volcano Plot", 
+                         p_cutoff = 0.05, 
+                         sig_color = "#377EB8", 
+                         ns_color = "grey70",
+                         xlim = c(-1, 1),
+                         ylim = NULL) {
+  
+  p <- ggplot(data, aes(x = logFC, y = -log10(adj.P.Val))) +
+    geom_point(aes(color = adj.P.Val < p_cutoff), size = 0.8, alpha = 0.6) +
+    scale_color_manual(
+      values = setNames(c(ns_color, sig_color), c("FALSE", "TRUE")),
+      labels = c("NS", paste0("FDR < ", p_cutoff))
+    ) +
+    geom_hline(yintercept = -log10(p_cutoff), linetype = "dashed", color = "red") +
+    labs(
+      title = title, 
+      x = "log2 Fold Change", 
+      y = "-log10(FDR)",
+      color = NULL
+    ) +
+    coord_cartesian(xlim = xlim, ylim = ylim) +
+    theme_bw(base_size = 11)
+  
+  return(p)
+}
+
+females_FP_plot <- plot_volcano(data = females_FP, title = "MSBB, FP, female: Volcano plot")
+males_FP_plot <- plot_volcano(data = males_FP, title = "MSBB, FP, male: Volcano plot")
+females_IFG_plot <- plot_volcano(data = females_IFG, title = "MSBB, IFG, female: Volcano plot")
+males_IFG_plot <- plot_volcano(data = males_IFG, title = "MSBB, IFG, male: Volcano plot")
+females_PG_plot <- plot_volcano(data = females_PG, title = "MSBB, PG, female: Volcano plot")
+males_PG_plot <- plot_volcano(data = males_PG, title = "MSBB, PG, male: Volcano plot")
+females_STG_plot <- plot_volcano(data = females_STG, title = "MSBB, STG, female: Volcano plot")
+males_STG_plot <- plot_volcano(data = males_STG, title = "MSBB, STG, male: Volcano plot")
+
+library(patchwork)
+plot_list <- list(females_FP_plot, males_FP_plot,
+                  females_IFG_plot,males_IFG_plot,
+                  females_PG_plot,males_PG_plot,
+                  females_STG_plot,males_STG_plot) 
+wrap_plots(plot_list, nrow = 4, ncol = 2)
+
+```

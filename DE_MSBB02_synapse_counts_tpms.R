@@ -39,6 +39,9 @@ filtered_genes_MSBB <- filter_gene_expression(
   tpm_file   = msbb_tpm ,
   reads_file  = msbb_counts,
   metadata  = MSBB_md,
+  tpm_thresh = 0.1, 
+  read_thresh = 6, 
+  prop_samples = 0.5,
   synid_outfile = c("syn76814282"),
   study_var = c("MSBB_all")
   )
