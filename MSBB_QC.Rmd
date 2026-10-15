@@ -11,9 +11,6 @@ output:
     toc_float: true
 ---
 
-# RUN FILE
-# rmarkdown::render("MSBB_QC.Rmd", output_format = "all")
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
 #install.packages("pacman")
@@ -224,14 +221,6 @@ plt1 <- ggplot(md_all[!is.na(md_all$RIN),] , aes(x = tissue2, y = RIN, fill = ti
 
 print(plt1)
 
-## table
-#tab_data <- as.data.frame.matrix(table(md_all_RIN_WARN$tissue2))
-
-#tab_data %>% kable(format = "html", caption = "RIN < 2.5 or missing RIN data: Sample count by tissue and final_batch") %>%
-#  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
-#                full_width = F, position = "left") %>%
-#  row_spec(0, bold = TRUE, color = "white", background = "#444444")
-
 ```
 
 
@@ -338,8 +327,6 @@ meta_sub_sex_unique <- result2 %>% filter(concordant2 == "Discordant" ) %>% dist
 plot_sex_scores(result_md)  
 
 
-
-
 ## table
 meta_sub_sex <- result2 %>% filter(concordant2 == "Discordant") |>
   dplyr::select(sample, tissue2, concordant2) |>
@@ -369,8 +356,6 @@ meta_sub_sex <- result2 %>% filter(concordant2 == "Discordant") |>
 kable(meta_sub_sex, format = "html", caption = "Reported sex vs inferred sex mismatches, with BM_36_296 (parahippocampal gyrus) marked as concordent due to being on the threshold" ) %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
   row_spec(0, bold = TRUE, color = "white", background = "#444444")
-
-
 
 ```
 
@@ -836,11 +821,11 @@ Uploaded to synapse: "MSBB_md_counts.rds" (metadata and counts), parent = "syn76
 *`r nrow(counts)` genes(s)*
 
 ```{r write synapse rds, eval=TRUE, echo=FALSE, include=FALSE, eval=FALSE}
-data_final <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ])
-output_filename <- "MSBB_md_counts.rds"
-saveRDS(data_final, file = output_filename)
-synapse_file_object <- File(path = "MSBB_md_counts.rds", parent = "syn76814282")
-synStore(synapse_file_object)
+#data_final <- list("metadata" = md_valid_qc, "counts" = counts[!zeros, ])
+#output_filename <- "MSBB_md_counts.rds"
+#saveRDS(data_final, file = output_filename)
+#synapse_file_object <- File(path = "MSBB_md_counts.rds", parent = "syn76814282")
+#synStore(synapse_file_object)
 ```
 
 
@@ -955,7 +940,7 @@ kable(
 
 # RNA metrics PCs 
 
-Ran RAN metrics as principal components to account for technical variation, ran on FP, IFG, PG, and STG only since FC will not be in full model due to sample size
+**Ran RAN metrics as principal components to account for technical variation, ran on FP, IFG, PG, and STG only since FC will not be in full model due to sample size**
 
 
 ```{r RNA metrics as PCA vectors, fig.height=20, fig.width=20}
@@ -967,14 +952,17 @@ md_metrics <- md_valid_qc[md_valid_qc$tissue2 != "PC",]
 # determining_technical_vars_for_RNA_metrics.R
 # first exclude any RNA metric associated with diagnosis
 metrics <- read.csv(synGet("syn76845876")$path, stringsAsFactors = FALSE)
-md_cts <- readRDS(synGet("syn76887997")$path)    # msbb_md_counts.rds
+md_cts <- counts[,colnames(counts) %in% md_metrics$specimenID]
 
-out <- qc_diagnosis_assoc(metrics, md_cts$metadata, diagnosis_col = "diagnosis", samples = colnames(counts))
+out <- qc_diagnosis_assoc(metrics, md_metrics, diagnosis_col = "diagnosis", samples = colnames(counts))
 metrics_keep <- out$metrics_keep   # original metrics minus the significant ones (specimenID kept)
 
+out2 <- qc_diagnosis_assoc(metrics, md_metrics, diagnosis_col = "sex", samples = colnames(counts))
+metrics_keep2 <- out2$metrics_keep   # original metrics minus the significant ones (specimenID kept)
+
 msbb_tv <- select_technical_vars(
-   counts        = md_cts$counts,
-   metadata      = md_cts$metadata,
+   counts        = md_cts,
+   metadata      = md_metrics,
   # metrics       = read.csv(synGet("syn76845876")$path, stringsAsFactors = FALSE),
    metrics       =  metrics_keep,
    sample_filter = function(md) md$tissue2 != "PC",
@@ -987,10 +975,12 @@ msbb_tv <- select_technical_vars(
 
 selected_metrics <- msbb_tv$final_metrics
 
+## adding in technical covariates ----
+# RNA metrics described using PCA
+## RNA metrics PCA to account for technical variability across batches
 library(Polychrome)
 p_colors <- glasbey.colors(19)[-1] #removes first color which is white
 my_shapes <- c(1:19)
-
 
 rownames(md_metrics) <- md_metrics$specimenID
 spec_vars<-md_metrics$specimenID
@@ -1001,6 +991,7 @@ metric_cols_mat <- as.data.frame(metric_cols_mat)
 metric_cols_mat_t <- t(metric_cols_mat_log)
 colnames(metric_cols_mat_t) <- spec_vars
 
+## FIRST check for how many significant PCs using broken stick
 pca_result_outliers <- run_pca_outliers2(metric_cols_mat_t,
                                          md_metrics,
                                          var_cutoff = 0,
@@ -1011,10 +1002,6 @@ pca_result_outliers <- run_pca_outliers2(metric_cols_mat_t,
 eig <- pca_result_outliers$sd_stats$sd^2
 library(vegan)
 bs <- bstick(length(eig), tot.var = sum(eig))
-#for (k in seq_along(eig)) {
-#  cat(sprintf("PC%d: eigenvalue=%.3f  broken-stick=%.3f  %s\n",
-#              k, eig[k], bs[k], ifelse(eig[k] > bs[k], "RETAIN", "drop")))
-#}
 
 keep  <- eig > bs
 n_ret <- if (all(keep)) length(eig) else which(!keep)[1] - 1   # consecutive rule
@@ -1029,21 +1016,36 @@ cat(sprintf(
 if (n_ret == 0) cat("*No component explained more variance than expected under the broken-stick model.*\n\n")
 # broken stick - end
 
+## SECOND run PCA to check for outliers - remove outliers
+rm(outlier_list)
 outlier_list <- list()
 pca_result_outliers <- run_pca_outliers2(metric_cols_mat_t,
                                          md_metrics,
                                          var_cutoff = 10,
                                           center = TRUE,
                                           scale = TRUE)
+
+id_outliers <- pca_result_outliers$outliers$specimenID
+id_outliers_db <- md_metrics[md_metrics$specimenID %in% id_outliers,]
+md_metrics_minus_outliers <- md_metrics[!(md_metrics$specimenID %in% id_outliers),]
+metric_cols_mat_t_minus_outlier <- metric_cols_mat_t[,!colnames(metric_cols_mat_t) %in% id_outliers]
+
+## THIRD now with outliers removed, run pca for PCs that represent rna metrics
+pca_result_outliers_forPCs <- run_pca_outliers2(metric_cols_mat_t_minus_outlier,
+                                        md_metrics_minus_outliers,
+                                         var_cutoff = 10,
+                                          center = T,
+                                          scale = T)
+
 pca_df <- as.data.frame(pca_result_outliers$scores[,c("specimenID", "PC1","PC2","PC3","PC4","PC5","PC6","is_outlier")])
 
 id_outliers <- pca_result_outliers$outliers$specimenID
 id_outliers_db <- md_metrics[md_metrics$specimenID %in% id_outliers,]
 
-pca_var <- as.data.frame(pca_result_outliers$var_explained)
+pca_var <- as.data.frame(pca_result_outliers_forPCs$var_explained)
 pca_var$PC <- rownames(pca_var)
-pca_var$variance <- pca_var$'pca_result_outliers$var_explained'
-pca_var <- pca_var %>% dplyr::select(-'pca_result_outliers$var_explained') 
+pca_var$variance <- pca_var$'pca_result_outliers_forPCs$var_explained'
+pca_var <- pca_var %>% select(-'pca_result_outliers_forPCs$var_explained') 
 pca_var <- pca_var[1:10,]
 
 pca_var %>%
@@ -1059,37 +1061,23 @@ pca_var %>%
   column_spec(1, width = "2cm")
 
 
-p1 <- plot_pca(pca_result_outliers, "PC1", "PC2", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
-p2 <- plot_pca(pca_result_outliers, "PC3", "PC4", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
-
- 
-p3a <- plot_pca(pca_result_outliers, "PC1", "PC2", "diagnosis" , title_var = c(paste("MSBB RNA metrics",sep="") ))
-p3b <- plot_pca(pca_result_outliers, "PC1", "PC2", "sequencingBatch" , title_var = c(paste("MSBB RNA metrics",sep="") ))
-
-#p1
-#p3a
-#p3b
+p1 <- plot_pca(pca_result_outliers_forPCs, "PC1", "PC2", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p2 <- plot_pca(pca_result_outliers_forPCs, "PC3", "PC4", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p3a <- plot_pca(pca_result_outliers_forPCs, "PC1", "PC2", "diagnosis" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p3b <- plot_pca(pca_result_outliers_forPCs, "PC1", "PC2", "sequencingBatch" , title_var = c(paste("MSBB RNA metrics",sep="") ))
 
 # ── p4: loadings — which metrics drive each PC ───────────────────────────────
-p4 <- plot_pca_loadings3(pca_result_outliers, pcs = c("PC1", "PC2", "PC3", "PC4"))
-#ggsave(paste("PCA_loadings_both_sexes_DLPFC.png",sep=""), plot =p4, width = 15, height = 10, dpi = 150)
+p4 <- plot_pca_loadings3(pca_result_outliers_forPCs, pcs = c("PC1", "PC2", "PC3", "PC4"))
 
 # ── p5: scree plot ────────────────────────────────────────────────────────────
-p5 <- plot_scree(pca_result_outliers)
-#ggsave(paste("PCA_scree_both_sexes_DLPFC.png",sep=""), plot =p5, width = 15, height = 10, dpi = 150)
+p5 <- plot_scree(pca_result_outliers_forPCs)
 
-#png("~/ROSMAP_DLPFC_CN_PCC_RNA_metrics_30July2026.png", width = 1700, height = 1900)
 library(patchwork)
 plot_list <- list(p1,p2,p3a,p3b) 
 wrap_plots(plot_list, nrow = 2, ncol = 2)
-#dev.off()
 
 plot_list <- list(p4,p5) 
 wrap_plots(plot_list, nrow = 1, ncol = 2)
-#dev.off()
-
-#plot_list2 <- list(p4,p5) 
-#wrap_plots(plot_list2, nrow = 1, ncol = 2)
 
 # metrics_pcs 
 metrics_pca_df <- pca_df %>% dplyr::rename(PC1_metrics = PC1, PC2_metrics = PC2, PC3_metrics = PC3, PC4_metrics = PC4, PC5_metrics = PC5, is_pc_metrics_outlier = is_outlier) %>% dplyr::select(specimenID, PC1_metrics, PC2_metrics, PC3_metrics, PC4_metrics, PC5_metrics, is_pc_metrics_outlier)
@@ -1102,14 +1090,9 @@ md_valid_qc_metrics_pca_outlier <- md_valid_qc_metrics_pca %>% filter(is_pc_metr
 ```
 
 
-
 ```{r addition sample to drop}
-#id_outliers <- pca_result_outliers$outliers$specimenID
-#id_outliers_db <- md_valid_qc_metrics_pca[md_valid_qc_metrics_pca$specimenID %in% id_outliers,]
 
 addition_drop <- id_outliers_db %>% dplyr::select(specimenID, tissue2, sex, diag2, diagnosis)
-
-#table(metrics_pca_df$is_pc_metrics_outlier)
 
 addition_drop %>%
   kable(format = "html", 
@@ -1128,10 +1111,8 @@ addition_drop %>%
 ```
 
 
-
-
 ```{r prep of final files}
-md_all <- md_valid_qc_metrics_pca
+md_all <- md_valid_qc_metrics_pca[!(md_valid_qc_metrics_pca$specimenID %in% id_outliers),]
 counts2 <- counts[,colnames(counts) %in% md_all$specimenID]
 
 # 1. Create a logical vector of matching columns
@@ -1241,7 +1222,7 @@ invisible(synLogin(silent=TRUE))
 cqn_save2 <- list("metadata" = md_all, "counts" = counts2, "dge_cqn" = dge_cqn2)
 output_filename2 <- "MSBB_md_counts_cqn_FINAL.rds"
 saveRDS(cqn_save2 , file = output_filename2)
-synapse_file_object2 <- File(path = "MSBB_md_counts_cqn_FINAL.rds", parent = "syn77539791")
+synapse_file_object2 <- File(path = "MSBB_md_counts_cqn_FINAL.rds", parent = "syn77801889")
 synStore(synapse_file_object2)
 ```
 
