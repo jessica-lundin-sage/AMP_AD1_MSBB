@@ -831,7 +831,7 @@ Uploaded to synapse: "MSBB_md_counts.rds" (metadata and counts), parent = "syn76
 
 # CQN normalization
 
-Final cqn outputs uploaded to synapse: "MSBB_md_counts_cqn.rds", parent = "synxx"
+Final cqn outputs uploaded to synapse: "MSBB_md_counts_cqn.rds"
 
 
 **Library preparation bias:** Library preparation method is a systematic technical covariate that affects GC content and gene length biases because these curves are not constant across library prep methods.
@@ -960,6 +960,8 @@ metrics_keep <- out$metrics_keep   # original metrics minus the significant ones
 out2 <- qc_diagnosis_assoc(metrics, md_metrics, diagnosis_col = "sex", samples = colnames(counts))
 metrics_keep2 <- out2$metrics_keep   # original metrics minus the significant ones (specimenID kept)
 
+metrics_keep <- metrics_keep[colnames(metrics_keep) %in% colnames(metrics_keep2)]
+
 msbb_tv <- select_technical_vars(
    counts        = md_cts,
    metadata      = md_metrics,
@@ -1030,8 +1032,9 @@ id_outliers_db <- md_metrics[md_metrics$specimenID %in% id_outliers,]
 md_metrics_minus_outliers <- md_metrics[!(md_metrics$specimenID %in% id_outliers),]
 metric_cols_mat_t_minus_outlier <- metric_cols_mat_t[,!colnames(metric_cols_mat_t) %in% id_outliers]
 
+
 ## THIRD now with outliers removed, run pca for PCs that represent rna metrics
-pca_result_outliers_forPCs <- run_pca_outliers2(metric_cols_mat_t_minus_outlier,
+pca_result_outliers_forPCs <- run_pca_rna_metrics(metric_cols_mat_t_minus_outlier,
                                         md_metrics_minus_outliers,
                                          var_cutoff = 10,
                                           center = T,
@@ -1039,8 +1042,6 @@ pca_result_outliers_forPCs <- run_pca_outliers2(metric_cols_mat_t_minus_outlier,
 
 pca_df <- as.data.frame(pca_result_outliers$scores[,c("specimenID", "PC1","PC2","PC3","PC4","PC5","PC6","is_outlier")])
 
-id_outliers <- pca_result_outliers$outliers$specimenID
-id_outliers_db <- md_metrics[md_metrics$specimenID %in% id_outliers,]
 
 pca_var <- as.data.frame(pca_result_outliers_forPCs$var_explained)
 pca_var$PC <- rownames(pca_var)
@@ -1061,16 +1062,16 @@ pca_var %>%
   column_spec(1, width = "2cm")
 
 
-p1 <- plot_pca(pca_result_outliers_forPCs, "PC1", "PC2", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
-p2 <- plot_pca(pca_result_outliers_forPCs, "PC3", "PC4", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
-p3a <- plot_pca(pca_result_outliers_forPCs, "PC1", "PC2", "diagnosis" , title_var = c(paste("MSBB RNA metrics",sep="") ))
-p3b <- plot_pca(pca_result_outliers_forPCs, "PC1", "PC2", "sequencingBatch" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p1 <- plot_pca(pca_result_outliers, "PC1", "PC2", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p2 <- plot_pca(pca_result_outliers, "PC3", "PC4", "tissue2" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p3a <- plot_pca(pca_result_outliers, "PC1", "PC2", "diagnosis" , title_var = c(paste("MSBB RNA metrics",sep="") ))
+p3b <- plot_pca(pca_result_outliers, "PC1", "PC2", "sequencingBatch" , title_var = c(paste("MSBB RNA metrics",sep="") ))
 
 # ── p4: loadings — which metrics drive each PC ───────────────────────────────
-p4 <- plot_pca_loadings3(pca_result_outliers_forPCs, pcs = c("PC1", "PC2", "PC3", "PC4"))
+p4 <- plot_pca_loadings3(pca_result_outliers, pcs = c("PC1", "PC2", "PC3", "PC4"))
 
 # ── p5: scree plot ────────────────────────────────────────────────────────────
-p5 <- plot_scree(pca_result_outliers_forPCs)
+p5 <- plot_scree(pca_result_outliers)
 
 library(patchwork)
 plot_list <- list(p1,p2,p3a,p3b) 
@@ -1080,12 +1081,14 @@ plot_list <- list(p4,p5)
 wrap_plots(plot_list, nrow = 1, ncol = 2)
 
 # metrics_pcs 
-metrics_pca_df <- pca_df %>% dplyr::rename(PC1_metrics = PC1, PC2_metrics = PC2, PC3_metrics = PC3, PC4_metrics = PC4, PC5_metrics = PC5, is_pc_metrics_outlier = is_outlier) %>% dplyr::select(specimenID, PC1_metrics, PC2_metrics, PC3_metrics, PC4_metrics, PC5_metrics, is_pc_metrics_outlier)
+metrics_pca_df <- pca_df %>% dplyr::rename(PC1_metrics = PC1, PC2_metrics = PC2, PC3_metrics = PC3, PC4_metrics = PC4, PC5_metrics = PC5) %>% dplyr::select(specimenID, PC1_metrics, PC2_metrics, PC3_metrics, PC4_metrics, PC5_metrics)
 #table(metrics_pca_df$is_pc_metrics_outlier)
 
 md_valid_qc_metrics_pca <- merge(md_valid_qc, metrics_pca_df, by="specimenID")
-md_valid_qc_metrics_pca <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outlier == FALSE)
-md_valid_qc_metrics_pca_outlier <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outlier == TRUE)
+
+#md_valid_qc_metrics_pca <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outlier == FALSE)
+
+#md_valid_qc_metrics_pca_outlier <- md_valid_qc_metrics_pca %>% filter(is_pc_metrics_outlier == TRUE)
 
 ```
 
@@ -1215,6 +1218,7 @@ kable(
   ) %>%
   # Apply inline style to force the caption to stay on one line
   row_spec(0, extra_css = "caption { white-space: nowrap; text-align: left; }")
+#summary(lm(md$PC1_metrics ~ md$sex))
 ```
 
 ```{r FINAL FILES to synapse, include=FALSE}
@@ -1283,7 +1287,7 @@ _Full model:_ Final models with individual covariates, formula  ~ 0 + group + ap
 _Residualized matrix model:_ Final models run with counts residualized on technical variables, formula  ~ 0 + group + apoe4Status + age_cat + (1|individualID)
 
 ```{r side-by-side-images2, echo=FALSE, out.width="100%", fig.show="hold", fig.align="default"}
-knitr::include_graphics(c("C:/Users/jlundin/OneDrive/git_code/RNASeq_DE/AMP_AD1/ALL_technical_provenance_staging/plots_full_v_resid_with_prev_diag/MSBB_DE_full_vs_resid_all_contrasts.png"))
+knitr::include_graphics(c("C:/Users/jlundin/OneDrive/git_code/RNASeq_DE/AMP_AD1/ALL_technical_provenance_staging/plots_full_v_resid/MSBB_DE_full_vs_resid_all_contrasts.png"))
 ```
 
 
