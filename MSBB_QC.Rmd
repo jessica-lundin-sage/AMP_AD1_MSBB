@@ -1238,19 +1238,16 @@ synStore(synapse_file_object2)
 Counts residualized on technical variables, formula: ~ PMI + RIN + PC1_metrics + PC2_metrics + PC3_metrics + (1|individualID) + (1|batch)
 
 ```{r DE_residual_plots_by_final_batch_and_diagnosis, cache=TRUE, cache.lazy=FALSE, fig.height=10, fig.width=8}
+
 ## plots of residualized data by batch and diagnosis
-# J Lundin
-# Aug 10 2026
 invisible(synLogin(silent=TRUE))
-
-file12 <- synGet("syn77617071") # msbb_md_res-counts_final.rds
-res12 <- readRDS(file12$path) 
-#ls(res12)
-res_counts <- res12$res_counts
-md_res <- res12$metadata
-
-#synLogin()
-# function at bottom - run first
+file12 <- synGet("syn77985831") # res_counts
+res_counts <- read_csv(file12$path) 
+md_res <- md_all
+rownames(md_res) <- md_res$specimenID
+res_counts <- as.data.frame(res_counts)
+rownames(res_counts) <- res_counts$ensembl_gene_id
+res_counts <- res_counts %>% select(-ensembl_gene_id, -external_gene_name, -gene_biotype, -chromosome_name, -gene_length, -percent_gc_content)
 
 res <- run_pca_res(res_counts, md_res, "Residuals")
 
